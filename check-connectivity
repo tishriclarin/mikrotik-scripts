@@ -1,0 +1,99 @@
+MikroTik Route Monitor Script
+This script continuously monitors the status of a default route's gateway on a MikroTik router. If the gateway becomes inactive, the script dynamically adjusts the route distance to 10 to deprioritize it. 
+When the gateway becomes active again, the script restores the original distance.
+
+Features:
+✅ Automated Monitoring – Continuously checks if the gateway is reachable.
+✅ Automatic Route Adjustment – Sets the route's distance to 10 when inactive.
+✅ Restores Original Distance – Resets the distance when the gateway is back online.
+✅ Lightweight & Efficient – Runs periodically as a MikroTik scheduler task.
+
+Currently, the script only monitors interfaces that have an active DHCP client.
+
+
+
+
+/ip firewall address-list 
+add address=8.8.8.8 list=PingHosts
+add address=4.2.2.1 list=PingHosts
+add address=127.0.0.1 list=PingHosts
+
+/system script add name=check-connectivity source={
+:foreach id in=[/ip dhcp-client find] do={
+    :local iface [/ip dhcp-client get $id interface]
+    :local status [/ip dhcp-client get $id status]
+    :local gateway ""
+    :local note "Ping Monitor"
+    
+    :local currentDate [/system clock get date] 
+    :local currentTime [/system clock get time]
+ 
+
+    # Only process DHCP clients that are bound
+    :if ($status = "bound") do={
+        :set gateway [/ip dhcp-client get $id gateway]
+        :put ("Processing interface: " . $iface . " | Gateway: " . $gateway)
+
+        # Get interface IP for ping source
+        :local ipaddr [:pick [ /ip address get [find interface=$iface] address] 0 [:find [ /ip address get [find interface=$iface] address] "/" ]]
+
+        # Initialize reachable host counter
+        :local reachableHosts 0
+
+        # Ping all hosts in the address-list "PingHosts"
+        :foreach host in=[/ip firewall address-list find where list="PingHosts"] do={
+            :local targetIP [/ip firewall address-list get $host address]
+            :local pingResult [ping $targetIP count=3 src-address=$ipaddr]
+
+            # If host is reachable, increase counter
+            :if ($pingResult > 0) do={
+                :set reachableHosts ($reachableHosts + 1)
+            }
+        }
+         
+        # Determine route distance
+        :local newDistance 10
+        :if ($reachableHosts > 0) do={
+            :set newDistance 1
+        } else={
+           :set note ($note."\n"."Interface: ".$iface." is Down". " Date:".$currentDate." ".$currentTime."\n")
+        }
+
+	      :local gw ($gateway."%".$iface)
+        # Find the default route (0.0.0.0/0) with the gateway
+        :local routesId [/ip route find where dst-address="0.0.0.0/0" gateway=$gw]
+
+      	# Check if multiple routes exist
+      	:if ([:len $routesId] > 1) do={
+      	    :local firstRoute [:pick $routesId 0]  
+      	    
+      	    # Iterate and remove duplicates (starting from index 1)
+      	    :for i from=1 to=([:len $routesId] - 1) do={
+      		    /ip route remove [:pick $routesId $i]
+      	    }
+      	    :set routesId $firstRoute
+      	} 
+
+	
+        # If the route doesn't exist, add it
+        :if ([:len $routesId] =0) do={
+            /ip route add dst-address=0.0.0.0/0 gateway=$gw distance=$newDistance
+            :put ("Added new route for " . $iface . " with distance " . $newDistance)
+        } else={
+            # Update route distance if needed
+            :local currentDistance [/ip route get $routesId distance]
+            :if ($currentDistance != $newDistance) do={
+                /ip route set $routesId distance=$newDistance
+                :put ("Updated route distance for " . $iface . " to " . $newDistance)
+            }
+        }
+    }
+    
+     /system/note/set note=$note
+     /system/note/set show-at-login=yes
+  }
+}
+
+
+/system scheduler
+add interval=5m name=run-check-connectivity on-event="/system/script/run check-connectivity"
