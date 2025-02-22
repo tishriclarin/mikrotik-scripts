@@ -59,7 +59,7 @@ add address=127.0.0.1 list=PingHosts
            :set note ($note."\n"."Interface: ".$iface." is Down". " Date:".$currentDate." ".$currentTime."\n")
         }
 
-	      :local gw ($gateway."%".$iface)
+	:local gw ($gateway."%".$iface)
         # Find the default route (0.0.0.0/0) with the gateway
         :local routesId [/ip route find where dst-address="0.0.0.0/0" gateway=$gw]
 
