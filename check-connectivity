@@ -16,10 +16,13 @@ Currently, the script only monitors interfaces that have an active DHCP client.
 /ip firewall address-list 
 add address=8.8.8.8 list=PingHosts
 add address=4.2.2.1 list=PingHosts
-add address=127.0.0.1 list=PingHosts
+add address=google.com list=PingHosts
 
 /system script add name=check-connectivity source={
+:local jobRunning [/system script job find where script="check-connectivity"] 
+
 :foreach id in=[/ip dhcp-client find] do={
+  :if ([:len $jobRunning] = 0) do={
     :local iface [/ip dhcp-client get $id interface]
     :local status [/ip dhcp-client get $id status]
     :local gateway ""
@@ -92,6 +95,7 @@ add address=127.0.0.1 list=PingHosts
      /system/note/set note=$note
      /system/note/set show-at-login=yes
   }
+ }
 }
 
 
