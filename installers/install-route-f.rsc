@@ -82,6 +82,36 @@
     :local installedCount 0
     :local skippedCount 0
 
+    # Create or repair VRF-WAN10 through VRF-WAN23. Only WANXX-MAC
+    # belongs to each WAN VRF; customer/LAN VLANs remain in main.
+    :for wanNumber from=10 to=23 do={
+        :local wanInterface ("WAN" . $wanNumber . "-MAC")
+        :local vrfName ("VRF-WAN" . $wanNumber)
+        :local wanInterfaceID [/interface find where name=$wanInterface]
+
+        :if ([:len $wanInterfaceID] = 0) do={
+            :log warning ("install-route-f: cannot create " . $vrfName . "; missing " . $wanInterface)
+        } else={
+            :local vrfID [/ip vrf find where name=$vrfName]
+
+            :if ([:len $vrfID] = 0) do={
+                /ip vrf add name=$vrfName interfaces=$wanInterface
+                :set vrfID [/ip vrf find where name=$vrfName]
+                :log info ("install-route-f: created " . $vrfName . " for " . $wanInterface)
+            } else={
+                /ip vrf set $vrfID interfaces=$wanInterface disabled=no
+                :log info ("install-route-f: repaired " . $vrfName . " for " . $wanInterface)
+            }
+
+            # VRFs are matched from top to bottom. Keep every WAN VRF
+            # above the built-in main interfaces=all entry.
+            :local mainID [/ip vrf find where name="main"]
+            :if (([:len $vrfID] > 0) && ([:len $mainID] > 0)) do={
+                /ip vrf move $vrfID $mainID
+            }
+        }
+    }
+
     :foreach dhcpID in=[/ip dhcp-client find] do={
         :local iface [/ip dhcp-client get $dhcpID interface]
         :local currentSource [:tostr [/ip dhcp-client get $dhcpID script]]
