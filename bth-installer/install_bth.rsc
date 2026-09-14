@@ -101,8 +101,9 @@
 
     :log warning ("installBTH: CONFIRMED begin user=" . $u . " reset-all=" . $resetAll)
     :if ($makeBackup = "yes") do={
-        /export show-sensitive=no file=("installBTH-prechange-" . $u)
-        /system/backup/save name=("installBTH-prechange-" . $u)
+        :local prechangeName ("installBTH-prechange-" . $u)
+        /export show-sensitive=no file=$prechangeName
+        /system/backup/save name=$prechangeName
     }
     /ip/cloud/set ddns-enabled=yes back-to-home-vpn=enabled
     :delay 5s
@@ -113,7 +114,8 @@
     :local vpnPort [/ip/cloud/get vpn-port]
 
     :if ($resetAll = "yes") do={
-        /export show-sensitive=no file=("bth-before-reset-" . $u)
+        :local resetBackupName ("bth-before-reset-" . $u)
+        /export show-sensitive=no file=$resetBackupName
         /ip/cloud/back-to-home-users/remove [find]
         /ip/firewall/filter/remove [find where comment~"installBTH:"]
         /ip/firewall/address-list/remove [find where comment~"installBTH:"]
