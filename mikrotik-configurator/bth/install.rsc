@@ -1,7 +1,7 @@
 # MikroTik Configurator BTH bootstrap
 # Import this file, then run: $installBTHBootstrap
 :global installBTHBootstrap do={
-    :local baseURL "https://raw.githubusercontent.com/tishriclarin/mikrotik-scripts/main/mikrotik-configurator"
+    :local baseURL "https://raw.githubusercontent.com/tishriclarin/mikrotik-scripts/a065229450060ba315f8f24f1231691bd13977fc/mikrotik-configurator"
     :local root "mkt-scripts"
     :local tmp "mkt-scripts/tmp/bth"
     :local shared "mkt-scripts/shared"
