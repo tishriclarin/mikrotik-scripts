@@ -2,7 +2,7 @@
 :global bootstrapProject do={
     :local projectName $project
     :if ($projectName != "bth") do={ :error "BOOTSTRAP FAILED: supported project is bth" }
-    :local baseURL "https://raw.githubusercontent.com/tishriclarin/mikrotik-scripts/b05c085582b8f62034deb149f494d4cb72ec01d4/mikrotik-configurator"
+    :local baseURL "https://raw.githubusercontent.com/tishriclarin/mikrotik-scripts/0e3e1fc608c70e90760e49a598e5193dbb232e4b/mikrotik-configurator"
     :local tmpPath "mkt-scripts/tmp/bootstrap"
     :foreach dirPath in={"mkt-scripts";"mkt-scripts/tmp";"mkt-scripts/tmp/bootstrap";"mkt-scripts/shared";"mkt-scripts/bth";"mkt-scripts/bth/files";"mkt-scripts/bth/history"} do={
         :if ([:len [/file/find where name=$dirPath and type="directory"]] = 0) do={ /file/add name=$dirPath type=directory }
