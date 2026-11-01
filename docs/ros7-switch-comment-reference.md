@@ -118,3 +118,19 @@ VLAN 20 becomes the port's dynamically untagged bridge VLAN membership through P
 The updater compares desired and current values, previews only required changes, and places bridge VLAN filtering **last** in the apply sequence. If enabling VLAN filtering from `no` to `yes`, it fails closed unless the running configuration already contains a reachable VLAN-on-bridge management IP and bridge VLAN entries that admit the same management VLAN on the CPU bridge interface and the identified protected management port (tagged or correctly configured PVID). An absent/ambiguous path is not considered safe. It requires interactive Safe Mode, session verification, gateway ARP baseline and post-change check, and user confirmation. It does **not** create the independent five-minute management-migration watchdog.
 
 **No RouterOS hardware test has been performed**. Use preview first. The bridge VLAN filtering transition can still interrupt forwarding or remove hardware offloading on incompatible switch chipsets; verify model support and use an out-of-band recovery path.
+
+## Reserved physical interface-name prefixes
+
+The actual RouterOS Ethernet interface name takes precedence over the `NAME:` comment when selecting the RSTP role and path cost:
+
+| Physical interface name | Path cost | Edge | Restricted role |
+| --- | ---: | --- | --- |
+| `UPLINK*` | 1 | no | no |
+| `NAS-LAN_*` or `NAS-LAN` | 10000 | no | yes |
+| `OLT-*` | 20000 | yes-discover | yes |
+| `DOWNLINK*` | 20000 | no | yes |
+| All other interfaces | 20000 | yes-discover | yes |
+
+Examples: `DOWNLINK1`, `DOWNLINK-AREA2`, and `DOWNLINK_sfp3` are downstream ports with `path-cost=20000`, `edge=no`, `restricted-role=yes`. `OLT-AREA1` has `path-cost=20000`. Management interface-list protections still override automatic bridge-port changes.
+
+The conventions are prefix matches on physical interface names; `NAME:` and `ROLE:` remain fallback means to classify ports not using these reserved physical names. These rules do not guarantee root-port choice independently of spanning-tree BPDUs. Verify via RouterOS preview and bridge monitor before applying remotely.
