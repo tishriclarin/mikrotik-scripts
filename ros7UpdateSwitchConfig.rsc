@@ -159,6 +159,7 @@
             :if (([:len $bp] = 1) && ([:len $eth] = 1)) do={
                 :local pc [/interface ethernet get $eth comment]
                 :local uplink (($p1 ~ "^UPLINK") || ($pc ~ "(^|_)ROLE:UPLINK($|_)") || ($pc ~ "(^|_)NAME: *UPLINK($|_)"))
+                :if (($p1 ~ "^NAS-LAN(_|$)") || ($p1 ~ "^OLT-") || ($p1 ~ "^DOWNLINK")) do={ :set uplink false }
                 :if ($uplink && ([:tostr [/interface bridge port get $bp path-cost]] = "1")) do={
                     :set swReady true
                     :set hopLevel $c1
@@ -206,10 +207,10 @@
     }
     :put "TOPOLOGY: UPLINK supplies VLAN/gateway access to NAS-WAN."
     :put "TOPOLOGY: NAS-LAN carries the OLT subscriber service VLANs."
-    :put "CAUTION: NAS-LAN:AUTO currently includes every discovered VLAN, including possible WAN VLANs."
-    :put "Use NAS-LAN:<explicit VLAN list> for WAN/subscriber separation."
+    :put "NAS-LAN uses TAGS for explicit subscriber VLAN membership."
+    :put "Separate WAN VLANs from subscriber VLANs with explicit TAGS lists."
     :put ("BRIDGE: " . $bridgeName . " vlan-filtering=" . $filtering)
-    :put "EXPECTED: vlan-filtering=yes. This script will NOT toggle it remotely."
+    :put "VLAN-FILTERING follows bridge comment, with guarded apply-last behavior."
     :if (!$filtering && $wantFiltering) do={
         :put "VLAN FILTERING: currently no; desired yes (preflight required)."
     }
