@@ -16,7 +16,6 @@
         :local version [/system resource get version]
         :if ([:pick $version 0 2] != "7.") do={ :error "RouterOS 7 required" }
 
-        # Return unique comma-separated items.
         :local append do={
             :local old [:tostr $1]
             :local item [:tostr $2]
@@ -28,8 +27,6 @@
             :return $old
         }
 
-        # "10,11,12", "10 to 15", "10to15", "10-15".
-        # Hard limit: 256 VLANs per expression, range 1..4094.
         :local expand do={
             :local raw [:tostr $1]
             :local result ""
@@ -86,8 +83,6 @@
             :return $result
         }
 
-        # If there is only one bridge, treat it as MAIN-SWITCH even without a comment.
-        # With multiple bridges, require one uniquely marked MAIN-SWITCH.
         :local allBridges [/interface bridge find]
         :local bridgeTotal [:len $allBridges]
         :if ($bridgeTotal = 0) do={
@@ -124,10 +119,8 @@
         :if ($protocol != "rstp") do={
             :error ("MAIN-SWITCH must use rstp; existing protocol-mode=" . $protocol)
         }
-        # Identity hierarchy: CORE-SW_SW:0, ISULAN-DSW_SW:1, etc.
         :local identity [/system identity get name]
         :local swReference $identity
-        # Bridge comment SW:N is accepted. If both specify SW:N, they must match.
         :if ($bridgeComment ~ "(^|_)SW:[0-9]+($|_)") do={
             :if ($identity ~ "_SW:[0-9]+$") do={
                 :local idMarker [:find $identity "_SW:"]
@@ -173,7 +166,6 @@
             :put "This script will NOT enable vlan-filtering."
         }
 
-        # Preserve existing physical management ports.
         :local mgmtMembers ""
         :local mgmtList [/interface list find where name="MGMT-IF"]
         :if ([:len $mgmtList] > 0) do={
@@ -237,7 +229,6 @@
                     :set key [:pick $token 0 $colon]
                     :set val [:pick $token ($colon + 1) [:len $token]]
                 } else={
-                    # Hyphen separator applies only to known argument keys.
                     :foreach prefix in={"TAGS-";"TAG-";"PVID-";"MGMT-";"UNTAG-";"VLAN-";"SPEED-";"MEDIA-";"ARP-"} do={
                         :if ([:pick $token 0 [:len $prefix]] = $prefix) do={
                             :set key [:pick $prefix 0 ([:len $prefix] - 1)]
@@ -248,7 +239,6 @@
                 :if (($key = "OLT") || ($key = "DOWNLINK") || ($key = "UPLINK")) do={
                     :set recognized true
                 }
-                # OLT:AREA1, OLT:51 etc. are labels, never VLAN IDs.
                 :if ($key = "OLT") do={
                     :set oltName $val
                 }
@@ -258,8 +248,6 @@
                     }
                     :set arpMode "AUTO"
                 }
-                # TAG:51 is a single tagged VLAN AND the ARP reference if no PVID.
-                # TAGS:10,11,12 adds other tagged VLANs but is not the ARP reference.
                 :if ($key = "TAG") do={
                     :local found [$expand $val]
                     :if ([:len [:toarray $found]] != 1) do={
@@ -288,7 +276,6 @@
                         :local found [$expand $val]
                         :foreach vid in=[:toarray $found] do={
                             :if ($key = "MGMT") do={
-                                # Resolve tagged/untagged status after parsing PVID and UNTAG.
                                 :set mgmtVlans [$append $mgmtVlans $vid]
                                 :set mgmtArpVlans [$append $mgmtArpVlans $vid]
                             } else={
@@ -330,10 +317,7 @@
                     }
                     :set media $val
                 }
-                # NAS-WAN:ISULAN-NAS is a descriptive marker, never a VLAN number.
             }
-            # Explicit PVID overrides UNTAG regardless of comment-token order.
-            # UNTAG is only a management VLAN untagging selector.
             :if ([:len $untagRequest] > 0) do={
                 :if ([:typeof [:find ("," . $mgmtVlans . ",") ("," . $untagRequest . ",")]] = "nil") do={
                     :error ("UNTAG:" . $untagRequest . " has no matching MGMT VLAN on " . $name)
@@ -347,7 +331,6 @@
                     }
                 }
             }
-            # Management VLANs are tagged except the single effective PVID.
             :foreach mgmtVid in=[:toarray $mgmtVlans] do={
                 :if ($mgmtVid != $pvid) do={
                     :set tagged [$append $tagged $mgmtVid]
@@ -365,7 +348,6 @@
                     :if (([:len $pvid] > 0) && ([:typeof [:find ("," . $tagged . ",") ("," . $pvid . ",")]] != "nil")) do={
                         :error ("Tagged and PVID conflict on " . $name . ": " . $pvid)
                     }
-                    # A PVID without any TAG/MGMT/VLAN or AUTO tagging is an untagged-only port.
                     :if (([:len $pvid] > 0) && ([:len $tagged] = 0) && ([:len $auto] = 0)) do={
                         :set accessPorts [$append $accessPorts $name]
                         :put ("ACCESS VLAN-UNTAGGED-ONLY: " . $name . " PVID=" . $pvid)
@@ -397,8 +379,6 @@
                     :set stpEdges ($stpEdges, $edgeSetting)
                     :local arpVlan ""
                     :if ($isOlt) do={
-                        # ARP service reference uses explicit PVID; otherwise TAG.
-                        # A fallback UNTAG management PVID must not override TAG.
                         :if ([:len $explicitPvid] > 0) do={
                             :set arpVlan $explicitPvid
                         } else={
@@ -418,7 +398,6 @@
             }
         }
 
-        # Validate parallel arrays before referencing them by index.
         :local n [:len $names]
         :if (([:len $pvids] != $n) || ([:len $tags] != $n) || ([:len $autos] != $n) || ([:len $speeds] != $n) || ([:len $mediaTypes] != $n) || ([:len $stpCosts] != $n) || ([:len $stpRoles] != $n) || ([:len $stpEdges] != $n) || ([:len $arpVlans] != $n)) do={
             :error "ABORT: Internal port metadata array length mismatch"
@@ -445,12 +424,6 @@
         }
 
 
-        # ARP:AUTO discovery: OLT:AREA1 is a label, not a VLAN.
-        # Reference VLAN = PVID if present, otherwise singular TAG.
-        # TAGS:... is not an OLT ARP reference; MGMT:... supplies additional ARP scan VLANs.
-        # Filter for C0:FF:EE and C0:FE:EE (digit zero), learned on UPLINK.
-        # Static ARP requires IP+MAC+L3 interface; a bridge FDB alone cannot
-        # supply a trustworthy IP. This stage intentionally does NOT write ARP.
         :local uplinkPorts ""
         :local oltFacingPorts ""
         :foreach uplinkRow in=[/interface ethernet find] do={
@@ -463,8 +436,6 @@
                 :set oltFacingPorts [$append $oltFacingPorts $physicalName]
             }
         }
-        # Include both OLT PVID/TAG references and MGMT VLANs.
-        # Deduplicate VLANs so MGMT:101 repeated across ports is inspected once.
         :local scanVlans [:toarray ""]
         :local scanKinds [:toarray ""]
         :local uniqueScan ""
@@ -500,7 +471,6 @@
                     :if ($vid = $scanVlan) do={
                         :local mac [:tostr [/interface bridge host get $learned mac-address]]
                         :local onIf [:tostr [/interface bridge host get $learned on-interface]]
-                        # C0 uses a hexadecimal ZERO, not the letter O.
                         :if (($mac ~ "^C0:FF:EE") || ($mac ~ "^C0:FE:EE")) do={
                             :local allowedSource ([:typeof [:find ("," . $uplinkPorts . ",") ("," . $onIf . ",")]] != "nil")
                             :local isMgmtScan ([:typeof [:find ("," . $mgmtArpVlans . ",") ("," . $scanVlan . ",")]] != "nil")
@@ -543,7 +513,6 @@
         }
         :put "ARP:AUTO is read-only: no static ARP writes without verified L3 IP-MAC mappings."
 
-        # Compare bridge membership and explicit PVID.
         :for i from=0 to=($n - 1) do={
             :local name [:pick $names $i]
             :local pvid [:pick $pvids $i]
@@ -565,7 +534,6 @@
             :local wantedCost [:pick $stpCosts $i]
             :local wantedRole [:pick $stpRoles $i]
             :local wantedEdge [:pick $stpEdges $i]
-            # Strict access-port check: do not silently retain explicitly tagged memberships.
             :if ($accessOnly) do={
                 :foreach row in=[/interface bridge vlan find where bridge=$bridgeName] do={
                     :if (![/interface bridge vlan get $row dynamic]) do={
@@ -662,8 +630,6 @@
             }
         }
 
-        # Also enforce root guard for EXISTING unannotated bridge ports.
-        # Managed ports are handled above; MGMT-IF members are protected.
         :foreach bp in=[/interface bridge port find where bridge=$bridgeName] do={
             :local pname [/interface bridge port get $bp interface]
             :local isMgmt ([:typeof [:find ("," . $mgmtMembers . ",") ("," . $pname . ",")]] != "nil")
@@ -719,8 +685,6 @@
             }
         }
 
-        # Plan one VLAN at a time. Only append static tagged membership.
-        # PVIDs use RouterOS dynamic untagged membership.
         :foreach vid in=[:toarray $universe] do={
             :local want ""
             :for i from=0 to=($n - 1) do={
@@ -787,7 +751,6 @@
             }
         }
 
-        # Speed comments: skip unsafe guesses about optical, DAC or copper.
         :for i from=0 to=($n - 1) do={
             :local speed [:pick $speeds $i]
             :local media [:pick $mediaTypes $i]
@@ -833,9 +796,6 @@
                 }
             }
         }
-        # Disable explicitly reserved/OTHER ports by default.
-        # Unclassified ports are disabled only when link-down, unbridged and unaddressed.
-        # Protect MGMT-IF membership and interface names beginning MGMT/Management.
         :foreach phys in=[/interface ethernet find] do={
             :local pname [/interface ethernet get $phys name]
             :local pc [:tostr [/interface ethernet get $phys comment]]
@@ -865,10 +825,6 @@
                 }
             }
         }
-        # RouterOS Ethernet loop protection complements RSTP.
-        # Cover ALL physical Ethernet interfaces, including MGMT-IF members,
-        # uplinks, downlinks, NAS ports, disabled ports, and unannotated ports.
-        # Only change loop-protect: preserve each interface's existing timers.
         :local loopChanges 0
         :foreach etherId in=[/interface ethernet find] do={
             :local etherName [/interface ethernet get $etherId name]
@@ -895,7 +851,6 @@
             :error "ABORT: vlan-filtering=no. Enable separately after ensuring management access."
         }
 
-        # Require terminal-owned Safe Mode; no unsafe remote apply without rollback.
         :local ownsSafe false
         :onerror safetyError in={
             :set ownsSafe [/safe-mode get current]
@@ -904,12 +859,10 @@
             :error "ABORT: apply requires terminal-owned SAFE MODE (Ctrl+X)"
         }
 
-        # Identify ONE active client; RouterOS cannot always infer a routed ingress.
         :local sessions [/user active find]
         :if ([:len $sessions] != 1) do={ :error "ABORT: cannot uniquely identify active management session" }
         :local client [:tostr [/user active get [:pick $sessions 0] address]]
 
-        # Select a unique active main-table IPv4 default gateway.
         :local routes [/ip route find where dst-address="0.0.0.0/0" and active]
         :local gateway ""
         :foreach routeId in=$routes do={
@@ -930,8 +883,6 @@
         :local firstIf [:tostr [/ip arp get $arpEntry interface]]
         :if ([:len $firstMac] != 17) do={ :error "ABORT: gateway ARP MAC unresolved" }
 
-        # Protect port that carries management. Direct client ARP first;
-        # for routed access use the gateway MAC; ambiguous results abort.
         :local protectedPort ""
         :local clientMac ""
         :local neighbor [/ip arp find where address=$client]
@@ -955,15 +906,16 @@
         :if ($protectedPort = "") do={
             :error "ABORT: physical management path cannot be identified confidently"
         }
-        :foreach i in=[:toarray $actionIds] do={
-            :if ($i = $protectedPort) do={
+        :for idx from=0 to=($actionsCount - 1) do={
+            :local target [:tostr [:pick $actionIds $idx]]
+            :local val [:tostr [:pick $actionValues $idx]]
+            :if (($target = $protectedPort) || ([:typeof [:find ("," . $val . ",") ("," . $protectedPort . ",")]] != "nil")) do={
                 :error ("ABORT: planned action touches management path " . $protectedPort)
             }
         }
         :put ("PROTECTED MANAGEMENT PORT: " . $protectedPort . " session=" . $client)
         :put ("GATEWAY BASELINE: " . $gateway . " MAC=" . $firstMac . " via=" . $firstIf . " pingReplies=" . $firstPing)
 
-        # Interactive one-minute Y/N/W confirmation. W extends by another minute.
         :local decision false
         :local pending true
         :while ($pending) do={
@@ -1006,8 +958,10 @@
         :if (([/file get $bin size] = 0) || ([/file get $rsc size] = 0)) do={ :error "Backup pair empty" }
         :put ("BACKUP PAIR SAVED: " . $safeBase)
 
-        # Non-destructive: no deletes, no vlan-filtering toggle, no bridge moves.
-        :for i from=0 to=($actionsCount - 1) do={
+        :local appliedOK true
+        :local applyReason ""
+        :onerror applyFailure in={
+            :for i from=0 to=($actionsCount - 1) do={
             :local action [:pick $actions $i]
             :local name [:pick $actionIds $i]
             :local value [:pick $actionValues $i]
@@ -1108,6 +1062,37 @@
                 /interface ethernet set [find where name=$name] auto-negotiation=no speed=$value
             }
             :put ("DONE: " . $action . " " . $name)
+            }
+            :local afterPing [/ping address=$gateway count=3]
+            :local afterRows [/ip arp find where address=$gateway]
+            :if ([:len $afterRows] != 1) do={ :error "Gateway ARP vanished" }
+            :local afterRow [:pick $afterRows 0]
+            :local afterMac [:tostr [/ip arp get $afterRow mac-address]]
+            :local afterIf [:tostr [/ip arp get $afterRow interface]]
+            :local afterStatus [:tostr [/ip arp get $afterRow status]]
+            :if (($afterMac != $firstMac) || ($afterIf != $firstIf)) do={
+                :error "Gateway ARP MAC/interface changed"
+            }
+            :if (($afterStatus = "failed") || ($afterStatus = "incomplete")) do={
+                :error "Gateway ARP is incomplete"
+            }
+            :if (($firstPing > 0) && ($afterPing = 0)) do={
+                :error "Gateway ICMP was reachable before but not after"
+            }
+            :put ("GATEWAY VERIFIED: " . $gateway . " MAC=" . $afterMac . " via=" . $afterIf)
+        } do={
+            :set appliedOK false
+            :set applyReason $applyFailure
+        }
+        :if (!$appliedOK) do={
+            :log error ("ros7UpdateSwitchConfig: " . $applyReason)
+            :put ("APPLY/HEALTH CHECK FAILED: " . $applyReason)
+            :onerror unrollFailure in={
+                /safe-mode unroll
+            } do={
+                :error ("SAFE MODE AUTO-UNROLL FAILED: " . $unrollFailure . "; press Ctrl+D manually")
+            }
+            :error "SAFE MODE AUTO-UNROLLED: configuration reverted"
         }
         :put "CONFIG UPDATE COMPLETE. Verify VLANs, root port, and link status before Safe Mode commit."
         :put ("Identity SW level " . $hopLevel . " is manually declared; NOT measured hop count.")
