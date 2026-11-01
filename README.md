@@ -155,3 +155,17 @@ scans VLAN 51 as the OLT service reference and VLAN 101 as the management refere
 The script looks for MAC prefixes **`C0:FF:EE`** or **`C0:FE:EE`** (digit zero, not letter O). Service VLAN scanning considers upstream UPLINK ports; MGMT VLAN scanning also considers OLT and DOWNLINK-facing ports, where OLT management MACs may actually be learned. It reports correlations only when an existing IP ARP entry matches a VLAN interface attached to `MAIN-SWITCH`. This is read-only discovery. **It does not create static ARP entries from learned MACs**. Static ARP belongs on the L3 gateway and requires a verified IP, MAC, and interface.
 
 This feature does not modify the protected `MGMT-IF` interface-list members or their bridge/RSTP configuration. Validate with `load-ros7UpdateSwitchConfig.rsc` and preview before any live apply.
+
+## MAIN-SWITCH bridge auto-detection and management UNTAG precedence
+
+The `ros7UpdateSwitchConfig.rsc` bridge selector now follows:
+
+- **One bridge:** use that bridge as the main switch regardless of its comment. Do not edit the comment automatically.
+- **Multiple bridges:** use the bridge with the exact comment `MAIN-SWITCH` only if it is unique; otherwise abort.
+- **Zero bridges:** abort rather than create one.
+
+For interface comments, `MGMT:101` is tagged by default. `MGMT:101_UNTAG:101` assigns the management VLAN as PVID 101 only when no explicit `PVID` exists. If `PVID:51` is present, VLAN 51 remains untagged, VLAN 101 stays tagged, and `UNTAG:101` is ignored for port PVID selection. An `UNTAG` value must match a `MGMT` VLAN. The `ARP:AUTO` service reference remains explicit PVID first, otherwise singular TAG, while management VLANs are scanned separately.
+
+Example: `OLT:AREA1_PVID:51_MGMT:101_UNTAG:101_TAGS:10,11,12` gives untagged VLAN 51, tagged VLANs 101/10/11/12, and no second untagged VLAN.
+
+Run `load-ros7UpdateSwitchConfig.rsc` to dry-run the main script before import, then `[$ros7UpdateSwitchConfig false]` for a read-only preview. Do not apply until interface VLAN membership and RSTP roles have been reviewed.
