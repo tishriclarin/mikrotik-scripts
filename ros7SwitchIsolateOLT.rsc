@@ -1,9 +1,11 @@
-# ros7SwitchIsolateOLT - RouterOS 7.25+ one-time terminal script
-# PREVIEW by default. To apply, change the value below to true.
-# For remote work, use interactive Safe Mode (Ctrl+X) before applying.
-{
-    :local apply false
-
+# RouterOS 7 global function installer (import registers function, never applies changes).
+:local prior [/system script find where name="ros7SwitchIsolateOLT"]
+:if ([:len $prior] > 0) do={ /system script remove $prior }
+/system script add name=ros7SwitchIsolateOLT policy=read,write,test source={
+    :global ros7SwitchIsolateOLT do={
+        :local apply $1
+        :if ([:typeof $apply] = "nil") do={ :set apply false }
+        :if ([:typeof $apply] != "bool") do={ :error "Argument must be Boolean true or false" }
     :local sources [:toarray ""]
     :local desired [:toarray ""]
     :local previous [:toarray ""]
@@ -118,91 +120,56 @@
         :put ("PLANNING ERROR AT: " . $stage)
         :error ("ABORT: " . $planError)
     }
-    :local total [:len $sources]
-    :put "==========================================="
-    :put ("PROPOSED PORT CHANGES: " . $total)
-    :if ($total > 30) do={ :error "ABORT: More than 30 changes in one batch" }
-    :if ($total = 0) do={
-        :put "NO CHANGES REQUIRED"
-    } else={
-        :if (!$apply) do={
-            :put "PREVIEW ONLY - NOTHING MODIFIED"
-        } else={
-            :local inSafe false
-            :local safeEnabled false
-            :onerror safeErr in={
-                :set inSafe [/safe-mode get current]
-                :set safeEnabled [/safe-mode get enabled]
-            } do={
-                :error ("ABORT: Cannot inspect Safe Mode: " . $safeErr)
-            }
-            :if ($safeEnabled && !$inSafe) do={
-                :error "ABORT: Another session owns Safe Mode"
-            }
-            :local confirmed $inSafe
-            :if (!$inSafe) do={
-                :put "WARNING: SAFE MODE NOT ACTIVE"
-                :put "Review every SOURCE / CURRENT / NEW line above."
-                :local answer ""
-                :onerror askErr in={
-                    :set answer [/terminal ask prompt="Type YES to apply, otherwise cancel"]
-                } do={
-                    :error ("ABORT: Interactive confirmation unavailable: " . $askErr)
-                }
-                :if ($answer = "YES") do={ :set confirmed true }
-            }
-            :if (!$confirmed) do={
-                :put "CANCELLED - NO CHANGES APPLIED"
-            } else={
-                :local failed false
-                :local reason ""
-                :onerror applyErr in={
-                    :for i from=0 to=($total - 1) do={
-                        :local name [:pick $sources $i]
-                        :local rule [:pick $desired $i]
-                        :local portId [/interface ethernet switch port-isolation find where name=$name]
-                        :if ([:len $portId] != 1) do={
-                            :error ("Source missing or ambiguous: " . $name)
-                        }
-                        :set attempted ($attempted, $i)
-                        /interface ethernet switch port-isolation set $portId forwarding-override=$rule
-                        :put ("APPLIED: " . $name)
-                    }
-                } do={
-                    :set failed true
-                    :set reason $applyErr
-                }
-                :if ($failed) do={
-                    :put ("APPLY ERROR: " . $reason)
-                    :local rollbackFailed false
-                    :foreach i in=$attempted do={
-                        :local name [:pick $sources $i]
-                        :local old [:pick $previous $i]
-                        :onerror restoreErr in={
-                            :local portId [/interface ethernet switch port-isolation find where name=$name]
-                            :if ([:len $portId] != 1) do={
-                                :error ("Source disappeared: " . $name)
-                            }
-                            /interface ethernet switch port-isolation set $portId forwarding-override=$old
-                            :put ("RESTORED: " . $name)
-                        } do={
-                            :set rollbackFailed true
-                            :put ("RESTORE FAILED: " . $name . " " . $restoreErr)
-                        }
-                    }
-                    :if ($rollbackFailed) do={
-                        :error "ROLLBACK INCOMPLETE - REVIEW CURRENT PORT SETTINGS"
-                    }
-                    :error "APPLY FAILED - ROLLBACK ATTEMPTED"
-                }
-                :put "OLT + DOWNLINK ISOLATION APPLIED"
-                :put ("UPDATED PORTS: " . $total)
-                :put "MGMT-IF member port settings remain unchanged"
-                :put "Verify switching traffic and management from another session"
-                :if ($inSafe) do={
-                    :put "Ctrl+X to COMMIT; Ctrl+D to ABANDON Safe Mode changes"
-                }
-            }
+        :local count [:len $sources]
+        :put ("PROPOSED CHANGES: " . $count)
+        :if ($count > 30) do={ :error "ABORT: too many ports" }
+        :if ($count = 0) do={ :put "NO CHANGES REQUIRED"; :return }
+        :if (!$apply) do={ :put "PREVIEW ONLY - NO CHANGES APPLIED"; :return }
+        :put "WARNING: LIVE SWITCH CHANGE. Use Safe Mode Ctrl+X before remote changes."
+        :local answer ""
+        :onerror askError in={ :set answer [/terminal/ask prompt="Type YES to apply, NO to cancel"] } do={
+            :error ("ABORT: confirmation unavailable: " . $askError)
         }
+        :if ($answer != "YES") do={ :put "CANCELLED"; :return }
+        :local modified [:toarray ""]
+        :local failed false
+        :local reason ""
+        :onerror applyError in={
+            :for i from=0 to=($count - 1) do={
+                :local portName [:pick $sources $i]
+                :local row [/interface ethernet switch port-isolation find where name=$portName]
+                :if ([:len $row] != 1) do={ :error ("Source not found: " . $portName) }
+                :set modified ($modified, $i)
+                /interface ethernet switch port-isolation set $row forwarding-override=[:pick $desired $i]
+                :put ("APPLIED: " . $portName)
+            }
+        } do={
+            :set failed true
+            :set reason $applyError
+        }
+        :if ($failed) do={
+            :put ("APPLY ERROR: " . $reason)
+            :local restoreFailed false
+            :foreach i in=$modified do={
+                :local name [:pick $sources $i]
+                :onerror restoreErr in={
+                    :local row [/interface ethernet switch port-isolation find where name=$name]
+                    :if ([:len $row] != 1) do={ :error "Source missing during rollback" }
+                    /interface ethernet switch port-isolation set $row forwarding-override=[:pick $previous $i]
+                    :put ("RESTORED: " . $name)
+                } do={
+                    :set restoreFailed true
+                    :put ("RESTORE ERROR: " . $name . " " . $restoreErr)
+                }
+            }
+            :if ($restoreFailed) do={ :error "ROLLBACK INCOMPLETE - CHECK PORTS" }
+            :error "FAILED: ROLLBACK ATTEMPTED"
+        }
+        :put "ISOLATION APPLIED. Check subscriber traffic and management before committing."
     }
 }
+/system script run ros7SwitchIsolateOLT
+:global ros7SwitchIsolateOLT
+:put "Global function loaded; no changes were applied during import."
+:put "Call preview: :global ros7SwitchIsolateOLT; [\$ros7SwitchIsolateOLT false]"
+:put "Call apply:   :global ros7SwitchIsolateOLT; [\$ros7SwitchIsolateOLT true]"
