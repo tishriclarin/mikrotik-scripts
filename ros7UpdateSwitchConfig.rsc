@@ -167,18 +167,21 @@
         }
 
         :local mgmtMembers ""
-        :local mgmtList [/interface list find where name="MGMT-IF"]
-        :if ([:len $mgmtList] > 0) do={
-            :if ([:len $mgmtList] != 1) do={ :error "Ambiguous MGMT-IF interface list" }
-            :local inc [:tostr [/interface list get $mgmtList include]]
-            :local exc [:tostr [/interface list get $mgmtList exclude]]
-            :if (([:len $inc] > 0) || ([:len $exc] > 0)) do={
-                :error "MGMT-IF uses dynamic include/exclude rules; inspect manually"
-            }
-            :foreach m in=[/interface list member find where list="MGMT-IF"] do={
-                :set mgmtMembers [$append $mgmtMembers [/interface list member get $m interface]]
+        :foreach listName in={"MGMT-IF";"MGMT";"MANAGEMENT"} do={
+            :local mgmtList [/interface list find where name=$listName]
+            :if ([:len $mgmtList] > 1) do={ :error ("Ambiguous management list: " . $listName) }
+            :if ([:len $mgmtList] = 1) do={
+                :local inc [:tostr [/interface list get $mgmtList include]]
+                :local exc [:tostr [/interface list get $mgmtList exclude]]
+                :if (([:len $inc] > 0) || ([:len $exc] > 0)) do={
+                    :error ("ABORT: inherited management list requires manual review: " . $listName)
+                }
+                :foreach m in=[/interface list member find where list=$listName] do={
+                    :set mgmtMembers [$append $mgmtMembers [/interface list member get $m interface]]
+                }
             }
         }
+        :put ("PROTECTED MANAGEMENT INTERFACES: " . $mgmtMembers)
 
         :local names [:toarray ""]
         :local pvids [:toarray ""]
@@ -829,7 +832,8 @@
         :foreach etherId in=[/interface ethernet find] do={
             :local etherName [/interface ethernet get $etherId name]
             :local state [:tostr [/interface ethernet get $etherId loop-protect]]
-            :if ($state != "on") do={
+            :local isMgmtPort ([:typeof [:find ("," . $mgmtMembers . ",") ("," . $etherName . ",")]] != "nil")
+            :if (($state != "on") && !$isMgmtPort) do={
                 :put ("ENABLE LOOP-PROTECT " . $etherName . " (current=" . $state . ")")
                 :set actions ($actions, "LOOPPROTECT")
                 :set actionIds ($actionIds, $etherName)
@@ -860,8 +864,28 @@
         }
 
         :local sessions [/user active find]
-        :if ([:len $sessions] != 1) do={ :error "ABORT: cannot uniquely identify active management session" }
+        :if ([:len $sessions] != 1) do={
+            :error "ABORT: one active session is required to identify the invoking management path"
+        }
         :local client [:tostr [/user active get [:pick $sessions 0] address]]
+        :if (($client ~ "[A-Fa-f]") || ([:typeof [:find $client ":"]] != "nil")) do={
+            :error "ABORT: management path currently requires IPv4 SSH/WinBox access"
+        }
+        :local clientIp [:toip $client]
+        :if ([:typeof $clientIp] != "ip") do={ :error "ABORT: active management session is not IPv4" }
+        :local trusted false
+        :local matchingList ""
+        :foreach addrRow in=[/ip firewall address-list find where ($clientIp in address)] do={
+            :local listName [/ip firewall address-list get $addrRow list]
+            :if (($listName = "MGMT") || ($listName = "REMOTE-MGMT") || ($listName = "MANAGEMENT") || ($listName = "REMOTE-MANAGEMENT") || ($listName = "REMOTE_MANAGEMENT")) do={
+                :set trusted true
+                :set matchingList $listName
+            }
+        }
+        :if (!$trusted) do={
+            :error ("ABORT: active client " . $client . " not in a recognized management address list")
+        }
+        :put ("MANAGEMENT SESSION: " . $client . " recognized by " . $matchingList)
 
         :local routes [/ip route find where dst-address="0.0.0.0/0" and active]
         :local gateway ""
