@@ -187,3 +187,7 @@ The management address-list match **authorizes the source address only**; it doe
 ## Current switch interface comment reference
 
 The canonical interface comment format now uses `NAME:<label>` for port names and `TAGS:<VLANs>` for tagged VLAN membership. Example: `TAGS:101,102,103_NAME:NAS-LAN`. The old `NAS-LAN:<VLANs>` syntax is rejected, and `OLT:<name>` has been superseded by `NAME:<name>` (with optional `ROLE:OLT`). For details and examples, see [the authoritative comment reference](docs/ros7-switch-comment-reference.md). Earlier examples above may describe the former grammar.
+
+## Bridge VLAN-FILTERING and access/trunk frame types (current)
+
+The current switch updater accepts bridge comment `VLAN-FILTERING:YES` or `VLAN-FILTERING:NO`, with **YES** the default if omitted. It compares the bridge setting and stages the change **last**, and refuses enablement if a management VLAN interface and matching bridge CPU / protected path cannot be verified. `NAME:NAS-LAN_TAGS:10,11,12` is tagged-only (`admit-only-vlan-tagged`); `NAME:NAS-WAN_PVID:20` is untagged-only (`admit-only-untagged-and-priority-tagged`); adding PVID to a tagged port makes it hybrid (`admit-all`). `NAME: NAS-WAN_PVID:20` is also recognized with optional space after the colon. Refer to [current comment documentation](docs/ros7-switch-comment-reference.md). This update has not been validated on production hardware.
