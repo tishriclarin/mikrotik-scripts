@@ -965,30 +965,32 @@
         :put ("PROTECTED MANAGEMENT PORT: " . $protectedPort . " session=" . $client)
         :put ("GATEWAY BASELINE: " . $gateway . " MAC=" . $firstMac . " via=" . $firstIf . " pingReplies=" . $firstPing)
         :if ($wantFiltering && !$filtering) do={
-            :local cpuReady false
-            :local pathReady false
+            :local mgmtSafe false
             :foreach v in=[/interface vlan find where interface=$bridgeName] do={
                 :local vid [:tostr [/interface vlan get $v vlan-id]]
-                :local vname [/interface vlan get $v name]
-                :if ([:len [/ip address find where interface=$vname and disabled=no]] > 0) do={
-                    :foreach vlanRow in=[/interface bridge vlan find where bridge=$bridgeName] do={
-                        :if (![/interface bridge vlan get $vlanRow disabled]) do={
-                            :local ids [$expand [:tostr [/interface bridge vlan get $vlanRow vlan-ids]]]
+                :local vn [/interface vlan get $v name]
+                :if ([:len [/ip address find where interface=$vn and disabled=no]] > 0) do={
+                    :local cpu false
+                    :local path false
+                    :foreach vr in=[/interface bridge vlan find where bridge=$bridgeName] do={
+                        :if (![/interface bridge vlan get $vr disabled]) do={
+                            :local ids [$expand [:tostr [/interface bridge vlan get $vr vlan-ids]]]
                             :if ([:typeof [:find ("," . $ids . ",") ("," . $vid . ",")]] != "nil") do={
-                                :local staticTagged [:tostr [/interface bridge vlan get $vlanRow tagged]]
-                                :if ([:typeof [:find ("," . $staticTagged . ",") ("," . $bridgeName . ",")]] != "nil") do={
-                                    :set cpuReady true
-                                }
-                                :if ([:typeof [:find ("," . $staticTagged . ",") ("," . $protectedPort . ",")]] != "nil") do={
-                                    :set pathReady true
-                                }
+                                :local tagged [:tostr [/interface bridge vlan get $vr tagged]]
+                                :if ([:typeof [:find ("," . $tagged . ",") ("," . $bridgeName . ",")]] != "nil") do={ :set cpu true }
+                                :if ([:typeof [:find ("," . $tagged . ",") ("," . $protectedPort . ",")]] != "nil") do={ :set path true }
                             }
                         }
                     }
+                    :local bp [/interface bridge port find where bridge=$bridgeName and interface=$protectedPort]
+                    :if ([:len $bp] = 1) do={
+                        :if (([:tostr [/interface bridge port get $bp pvid]] = $vid) && ([:tostr [/interface bridge port get $bp frame-types]] != "admit-only-vlan-tagged")) do={ :set path true }
+                    }
+                    :if ($cpu && $path) do={ :set mgmtSafe true }
                 }
             }
-            :if (!$cpuReady || !$pathReady) do={
-                :error "ABORT: VLAN-FILTERING enable requires existing static MGMT VLAN row tagging bridge CPU and protected management uplink, with active management VLAN IP"
+            :if (!$mgmtSafe) do={
+                :error "ABORT: enabling VLAN filtering requires an active VLAN-on-bridge management IP and same-VLAN bridge CPU plus protected physical path"
             }
         }
 
