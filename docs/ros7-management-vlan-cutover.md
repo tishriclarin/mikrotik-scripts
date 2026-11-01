@@ -22,9 +22,9 @@ Status: **design / not yet an executable production migration**. The current `ro
 ### Current administrator is proven to be connected to the MGMT VLAN IP
 
 1. Start the independent five-minute watchdog and apply only staged changes.
-2. Test the new VLAN path using a **second session** addressed explicitly to the VLAN interface IP. RouterOS `/user active` displays client SOURCE address, not the switch destination IP; same username/source alone is insufficient evidence that the new management VLAN works.
-3. Only when a session can be positively associated with the new VLAN IP, intentionally log out **only the original session ID** with `/user active remove <id>` (or `request-logout` on builds with that action). Do not remove all sessions by username.
-4. Require reconnection to the VLAN IP and a one-time confirmation command from that new session while the watchdog is pending. Successful reconnection requires both a new session and proof of its destination, not just a matching source address.
+2. Positively identify the **original** terminal session as being connected to the management VLAN IP. RouterOS `/user active` shows the client SOURCE address, not the switch destination IP; a username/source match alone is insufficient. If the destination cannot be established, do not force logout.
+3. After the independently scheduled rollback watchdog is armed, deliberately log out **only that original session ID**, using `/user active remove <id>` (or `request-logout` where supported). Do not terminate every session using the same username. The stage script must finish before an independent scheduled task performs the logout.
+4. Require reconnection to the VLAN IP and a one-time confirmation command from that new session while the five-minute watchdog is pending. Confirmation must verify a new authenticated session, the expected management destination, and the staging token. Do not infer success from a matching username/source alone.
 5. If confirmation occurs within five minutes, cancel the watchdog, then remove only the legacy IP on the bridge (if it was recorded as a migration candidate). Otherwise automatically restore the exact staged settings and leave the legacy IP intact.
 
 ### Current administrator is on the actual Etherboot/management access port
