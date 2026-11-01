@@ -86,3 +86,19 @@ For a remote apply, use an interactive Safe Mode session (Ctrl+X), verify a seco
 Dry-run checks import syntax and some command errors but does not guarantee runtime or hardware compatibility. The existing `install-ros7SwitchIsolateOLT.rsc` is retained for compatibility; the recommended new entry point is `load-ros7SwitchIsolateOLT.rsc`.
 
 **Pending safety features:** the current main script does not yet implement single-instance cancellation, a 30-second confirmation timeout, or automatic backup rotation.
+
+## ros7UpdateSwitchConfig: loop protection on all Ethernet ports
+
+The latest `ros7UpdateSwitchConfig.rsc` previews or enables `loop-protect=on` for **every physical Ethernet interface** on the switch. This includes UPLINK, NAS-LAN, OLT, DOWNLINK, unannotated ports, and MGMT-IF members. The MGMT-IF exception for VLAN/bridge/RSTP changes remains; only loop protection is applied to those interfaces. Existing `loop-protect-send-interval` and `loop-protect-disable-time` values are preserved.
+
+The main script is used with `load-ros7UpdateSwitchConfig.rsc` and SHA-512 sidecars. The loader validates with import dry-run before registering the global function.
+
+    /import file-name=load-ros7UpdateSwitchConfig.rsc
+    :global ros7UpdateSwitchConfig
+    [$ros7UpdateSwitchConfig false]
+
+Review the preview before applying. RouterOS loop protection can temporarily disable a port if it detects its own loop-protect packet; the default recovery is five minutes unless configured otherwise. Because an uplink or management Ethernet port can be affected, apply remotely only with Safe Mode and an out-of-band recovery plan.
+
+    [$ros7UpdateSwitchConfig true]
+
+This is complementary to RSTP, not a replacement. Virtual/bridge interfaces are not modified by the all-Ethernet loop-protection step.
