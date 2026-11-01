@@ -146,6 +146,7 @@
         :local stpRoles [:toarray ""]
         :local universe ""
         :local oltPvids ""
+        :local accessPorts ""
 
         :foreach eth in=[/interface ethernet find] do={
             :local name [/interface ethernet get $eth name]
@@ -235,6 +236,11 @@
                     :if (([:len $pvid] > 0) && ([:typeof [:find ("," . $tagged . ",") ("," . $pvid . ",")]] != "nil")) do={
                         :error ("Tagged and PVID conflict on " . $name . ": " . $pvid)
                     }
+                    # A PVID without any TAG/MGMT/VLAN or AUTO tagging is an untagged-only port.
+                    :if (([:len $pvid] > 0) && ([:len $tagged] = 0) && ([:len $auto] = 0)) do={
+                        :set accessPorts [$append $accessPorts $name]
+                        :put ("ACCESS VLAN-UNTAGGED-ONLY: " . $name . " PVID=" . $pvid)
+                    }
                     :set names ($names, $name)
                     :set pvids ($pvids, $pvid)
                     :set tags ($tags, $tagged)
@@ -284,8 +290,27 @@
         :for i from=0 to=($n - 1) do={
             :local name [:pick $names $i]
             :local pvid [:pick $pvids $i]
+            :local accessOnly ([:typeof [:find ("," . $accessPorts . ",") ("," . $name . ",")]] != "nil")
             :local wantedCost [:pick $stpCosts $i]
             :local wantedRole [:pick $stpRoles $i]
+            # Strict access-port check: do not silently retain explicitly tagged memberships.
+            :if ($accessOnly) do={
+                :foreach row in=[/interface bridge vlan find where bridge=$bridgeName] do={
+                    :if (![/interface bridge vlan get $row dynamic]) do={
+                        :local staticTag [:tostr [/interface bridge vlan get $row tagged]]
+                        :if ([:typeof [:find ("," . $staticTag . ",") ("," . $name . ",")]] != "nil") do={
+                            :error ("ABORT: access-only " . $name . " remains statically TAGGED on VLAN " . [/interface bridge vlan get $row vlan-ids] . "; review VLAN table")
+                        }
+                        :local staticUntag [:tostr [/interface bridge vlan get $row untagged]]
+                        :if ([:typeof [:find ("," . $staticUntag . ",") ("," . $name . ",")]] != "nil") do={
+                            :local assigned [$expand [:tostr [/interface bridge vlan get $row vlan-ids]]]
+                            :if (($assigned != $pvid)) do={
+                                :error ("ABORT: access-only " . $name . " has untagged VLAN " . $assigned . " conflicting with PVID " . $pvid)
+                            }
+                        }
+                    }
+                }
+            }
             :local existing [/interface bridge port find where interface=$name]
             :if ([:len $existing] > 1) do={ :error ("Duplicate bridge ports: " . $name) }
             :if ([:len $existing] = 1) do={
@@ -312,18 +337,33 @@
                     :set actionValues ($actionValues, ([:tostr $wantedCost] . ":" . $wantedRole))
                     :set actionsCount ($actionsCount + 1)
                 }
-                :if ([:len $pvid] > 0) do={
-                    :if ([:tostr [/interface bridge port get $existing pvid]] != $pvid) do={
-                        :put ("UPDATE PVID " . $name . " -> " . $pvid)
-                        :set actions ($actions, "PVID")
+                :if ($accessOnly) do={
+                    :local curPvid [:tostr [/interface bridge port get $existing pvid]]
+                    :local curFrames [:tostr [/interface bridge port get $existing frame-types]]
+                    :local curIngress [/interface bridge port get $existing ingress-filtering]
+                    :if (($curPvid != $pvid) || ($curFrames != "admit-only-untagged-and-priority-tagged") || (!$curIngress)) do={
+                        :put ("SET ACCESS VLAN-UNTAGGED-ONLY " . $name . " pvid=" . $pvid . " frame-types=admit-only-untagged-and-priority-tagged ingress-filtering=yes")
+                        :set actions ($actions, "ACCESS")
                         :set actionIds ($actionIds, $name)
                         :set actionValues ($actionValues, $pvid)
                         :set actionsCount ($actionsCount + 1)
                     }
+                } else={
+                    :if ([:len $pvid] > 0) do={
+                        :if ([:tostr [/interface bridge port get $existing pvid]] != $pvid) do={
+                            :put ("UPDATE PVID " . $name . " -> " . $pvid)
+                            :set actions ($actions, "PVID")
+                            :set actionIds ($actionIds, $name)
+                            :set actionValues ($actionValues, $pvid)
+                            :set actionsCount ($actionsCount + 1)
+                        }
+                    }
                 }
             } else={
                 :put ("ADD BRIDGE PORT " . $name . " to " . $bridgeName . " pvid=" . $pvid)
-                :set actions ($actions, "PORT")
+                :local action "PORT"
+                :if ($accessOnly) do={ :set action "PORTACCESS" }
+                :set actions ($actions, $action)
                 :set actionIds ($actionIds, $name)
                 :set actionValues ($actionValues, $pvid)
                 :set actionsCount ($actionsCount + 1)
@@ -488,7 +528,7 @@
             :if ($action = "BRIDGEPRIORITY") do={
                 /interface bridge set $bridgeId priority=[:tonum $value]
             }
-            :if ($action = "PORT") do={
+            :if (($action = "PORT") || ($action = "PORTACCESS")) do={
                 :local cost 20000
                 :local restricted "keep"
                 :local ethId [/interface ethernet find where name=$name]
@@ -502,18 +542,31 @@
                         :set restricted "yes"
                     }
                 }
-                :if (($restricted = "no") || ($restricted = "yes")) do={
-                    :if ($value = "") do={
-                        /interface bridge port add bridge=$bridgeName interface=$name path-cost=$cost restricted-role=($restricted = "yes")
+                :local restrictedBoolean false
+                :if ($restricted = "yes") do={ :set restrictedBoolean true }
+                :if ($action = "PORTACCESS") do={
+                    :if ([:len $value] = 0) do={
+                        :error ("ACCESS port missing PVID: " . $name)
+                    }
+                    :if ($restricted = "keep") do={
+                        /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost frame-types=admit-only-untagged-and-priority-tagged ingress-filtering=yes
                     } else={
-                        /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost restricted-role=($restricted = "yes")
+                        /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost restricted-role=$restrictedBoolean frame-types=admit-only-untagged-and-priority-tagged ingress-filtering=yes
                     }
                 } else={
-                :if ($value = "") do={
-                    /interface bridge port add bridge=$bridgeName interface=$name path-cost=$cost
-                } else={
-                    /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost
-                }
+                    :if ($restricted = "keep") do={
+                        :if ($value = "") do={
+                            /interface bridge port add bridge=$bridgeName interface=$name path-cost=$cost
+                        } else={
+                            /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost
+                        }
+                    } else={
+                        :if ($value = "") do={
+                            /interface bridge port add bridge=$bridgeName interface=$name path-cost=$cost restricted-role=$restrictedBoolean
+                        } else={
+                            /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost restricted-role=$restrictedBoolean
+                        }
+                    }
                 }
             }
             :if ($action = "RSTP") do={
@@ -530,6 +583,13 @@
                 } else={
                     /interface bridge port set $bridgePort path-cost=$cost restricted-role=($restriction = "yes")
                 }
+            }
+            :if ($action = "ACCESS") do={
+                :local bridgePort [/interface bridge port find where interface=$name and bridge=$bridgeName]
+                :if ([:len $bridgePort] != 1) do={
+                    :error ("Access bridge port missing: " . $name)
+                }
+                /interface bridge port set $bridgePort pvid=[:tonum $value] frame-types=admit-only-untagged-and-priority-tagged ingress-filtering=yes
             }
             :if ($action = "PVID") do={
                 /interface bridge port set [find where interface=$name and bridge=$bridgeName] pvid=[:tonum $value]
