@@ -39,7 +39,7 @@ SW:AUTO only proposes SW-VALUE when two RSTP monitor readings match and the root
 
 ## 2. Interface comment grammar
 
-Use underscore to separate tokens, colon to separate key/value, comma to separate VLAN values. Avoid underscores within NAME values because they are delimiters.
+Use underscore to separate tokens, colon to separate key/value, comma to separate VLAN values. Avoid underscores within NAME values because they are delimiters. NAME may contain spaces, for example `NAME:AREA1 OLT` or `NAME: NAS-WAN`; surrounding spaces are trimmed.
 
     NAME:<label>_ROLE:<role>_PVID:<vlan>_TAG:<vlan>_TAGS:<list>_MGMT:<vlan>_UNTAG:<vlan>_SPEED:<setting>_MEDIA:<type>_ARP:AUTO
 
@@ -47,7 +47,7 @@ The order of tokens is flexible. Use only the fields needed for each interface.
 
 | Field | Accepted values | Result |
 | --- | --- | --- |
-| NAME | AREA1, UPLINK, NAS-LAN, NAS-WAN, DOWNLINK, MGMT, other label | Descriptive name; not the actual RouterOS interface rename command |
+| NAME | AREA1, UPLINK, NAS-LAN, NAS-WAN, DOWNLINK, MGMT, other label | **Bridge-port comment**: sets `/interface bridge port comment` to the NAME value without renaming the physical Ethernet interface |
 | ROLE | OLT, UPLINK, DOWNLINK, NAS-LAN, NAS-WAN, MGMT | Explicit port role when needed |
 | PVID | Exactly one VLAN, e.g. 51 | One untagged/native VLAN; wins over UNTAG |
 | TAG | Exactly one VLAN, e.g. 51 | Tagged OLT service VLAN; used for ARP lookup if PVID is absent |
@@ -73,6 +73,19 @@ VLAN access/frame-type outcomes:
 | NAME:AREA1_ROLE:OLT_PVID:51_MGMT:101_UNTAG:101 | admit-all | PVID 51 wins; MGMT 101 stays tagged |
 
 ARP:AUTO scans VLAN from the explicit OLT PVID (priority) or singular TAG, and MGMT VLAN separately; only MAC prefix C0:FF:EE or C0:FE:EE (digit zero) is considered. Static ARP needs verified IP/MAC/L3 interface and is not automatically installed.
+
+
+### NAME bridge-port comment reconciliation
+
+For example, on a physical Ethernet interface `sfp-sfpplus3` with:
+
+    NAME:AREA1 OLT_ROLE:OLT_PVID:51_MGMT:101
+
+the updater previews and, when approved, performs:
+
+    /interface bridge port set [find where interface="sfp-sfpplus3"] comment="AREA1 OLT"
+
+It does **not** rename `sfp-sfpplus3`. Existing bridge ports are updated only when the comment differs; new bridge ports receive the comment after creation. The port remains referenced under its original physical name for VLAN and RSTP changes. Ports protected through the management interface lists are not modified.
 
 ## 3. Recommended ready-to-use examples
 
