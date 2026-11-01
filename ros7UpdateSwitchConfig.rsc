@@ -116,6 +116,10 @@
         :if ($hopLevel = 0) do={
             :put "CORE LEVEL 0: root bridge has no root port."
         }
+        :put "TOPOLOGY: UPLINK supplies VLAN/gateway access to NAS-WAN."
+        :put "TOPOLOGY: NAS-LAN carries the OLT subscriber service VLANs."
+        :put "CAUTION: NAS-LAN:AUTO currently includes every discovered VLAN, including possible WAN VLANs."
+        :put "Use NAS-LAN:<explicit VLAN list> for WAN/subscriber separation."
         :put ("BRIDGE: " . $bridgeName . " vlan-filtering=" . $filtering)
         :if (!$filtering) do={
             :put "WARNING: vlan-filtering=no; configuration will be staged but not effective."
