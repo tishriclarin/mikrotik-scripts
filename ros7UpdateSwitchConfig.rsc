@@ -137,12 +137,14 @@
         :local p1 ""; :local p2 ""
         :local c1 -1; :local c2 -1
         :local r1 ""; :local r2 ""
+        :local id1 ""; :local id2 ""
         :local state1 ""; :local state2 ""
         :onerror e in={
             /interface bridge monitor $bridgeName once do={
                 :set p1 [:tostr $"root-port"]
                 :set c1 [:tonum $"root-path-cost"]
                 :set r1 [:tostr $"root-bridge"]
+                :set id1 [:tostr $"root-bridge-id"]
                 :set state1 [:tostr $state]
             }
             :delay 2s
@@ -150,10 +152,11 @@
                 :set p2 [:tostr $"root-port"]
                 :set c2 [:tonum $"root-path-cost"]
                 :set r2 [:tostr $"root-bridge"]
+                :set id2 [:tostr $"root-bridge-id"]
                 :set state2 [:tostr $state]
             }
         } do={ :put ("SW:AUTO monitor failed: " . $e) }
-        :if (($p1 = $p2) && ($c1 = $c2) && ($r1 = $r2) && ($state1 = "enabled") && ($state1 = $state2) && (($r1 = "no") || ($r1 = "false")) && ([:typeof $c1] = "num") && ($c1 >= 1) && ($c1 <= 15) && ($p1 != "") && ($p1 != "none")) do={
+        :if (($p1 = $p2) && ($c1 = $c2) && ($r1 = $r2) && ($id1 = $id2) && ([:len $id1] > 0) && ($state1 = "enabled") && ($state1 = $state2) && (($r1 = "no") || ($r1 = "false")) && ([:typeof $c1] = "num") && ($c1 >= 1) && ($c1 <= 15) && ($p1 != "") && ($p1 != "none")) do={
             :local bp [/interface bridge port find where bridge=$bridgeName and interface=$p1]
             :local eth [/interface ethernet find where name=$p1]
             :if (([:len $bp] = 1) && ([:len $eth] = 1)) do={
@@ -202,7 +205,7 @@
     :put "Only UPLINK is an allowed root-port path (cost 1); NAS-LAN serves the OLT gateway (cost 10000, root guarded)."
     :put "Comments: use NAME:XXX for port identity, TAGS:... for VLAN membership; ROLE:OLT optional if service VLAN is not explicit."
     :put "UPLINK: edge=no role=no; NAS-LAN: edge=no role=yes; DOWNLINK: edge=no role=yes; OLT/other: edge=yes-discover role=yes."
-    :if ($hopLevel = 0) do={
+    :if ($swReady && ($hopLevel = 0)) do={
         :put "CORE LEVEL 0: root bridge has no root port."
     }
     :put "TOPOLOGY: UPLINK supplies VLAN/gateway access to NAS-WAN."
