@@ -151,6 +151,7 @@
         :local currentPriority [/interface bridge get $bridgeId priority]
         :put ("RSTP HIERARCHY: " . $identity . " level=" . $hopLevel . " priority=" . $desiredPriority)
         :put "Only UPLINK is an allowed root-port path (cost 1); NAS-LAN serves the OLT gateway (cost 10000, root guarded)."
+        :put "Comments: use NAME:XXX for port identity, TAGS:... for VLAN membership; ROLE:OLT optional if service VLAN is not explicit."
         :put "UPLINK: edge=no role=no; NAS-LAN: edge=no role=yes; DOWNLINK: edge=no role=yes; OLT/other: edge=yes-discover role=yes."
         :if ($hopLevel = 0) do={
             :put "CORE LEVEL 0: root bridge has no root port."
@@ -164,6 +165,18 @@
         :if (!$filtering) do={
             :put "WARNING: vlan-filtering=no; configuration will be staged but not effective."
             :put "This script will NOT enable vlan-filtering."
+        }
+
+        :local roleOf do={
+            :local c [:tostr $1]
+            :if (($c ~ "(^|_)ROLE:UPLINK($|_)") || ($c ~ "(^|_)NAME:UPLINK($|_)") || ($c ~ "^UPLINK($|_)")) do={ :return "UPLINK" }
+            :if (($c ~ "(^|_)ROLE:NAS-LAN($|_)") || ($c ~ "(^|_)NAME:NAS-LAN($|_)") || ($c ~ "^NAS-LAN:")) do={ :return "NAS-LAN" }
+            :if (($c ~ "(^|_)ROLE:NAS-WAN($|_)") || ($c ~ "(^|_)NAME:NAS-WAN($|_)")) do={ :return "NAS-WAN" }
+            :if (($c ~ "(^|_)ROLE:DOWNLINK($|_)") || ($c ~ "(^|_)NAME:DOWNLINK($|_)") || ([$roleOf $c] = "DOWNLINK")) do={ :return "DOWNLINK" }
+            :if (($c ~ "(^|_)ROLE:MGMT($|_)") || ($c ~ "(^|_)NAME:MGMT($|_)")) do={ :return "MGMT" }
+            :if (($c ~ "(^|_)ROLE:OLT($|_)") || ($c ~ "(^|_)NAME:OLT($|_)") || ($c ~ "^OLT:")) do={ :return "OLT" }
+            :if (($c ~ "(^|_)NAME:") && (($c ~ "(^|_)PVID:") || ($c ~ "(^|_)TAG:"))) do={ :return "OLT" }
+            :return "OTHER"
         }
 
         :local mgmtMembers ""
@@ -211,10 +224,11 @@
             :local speed "AUTO"
             :local media ""
             :local arpMode "AUTO"
-            :local oltName ""
+            :local displayName ""
             :local tagReference ""
             :local recognized false
-            :local isOlt ($comment ~ "^OLT")
+            :local role [$roleOf $comment]
+            :local isOlt ($role = "OLT")
             :while ([:len $rest] > 0) do={
                 :local cut [:find $rest "_"]
                 :local token ""
@@ -232,18 +246,25 @@
                     :set key [:pick $token 0 $colon]
                     :set val [:pick $token ($colon + 1) [:len $token]]
                 } else={
-                    :foreach prefix in={"TAGS-";"TAG-";"PVID-";"MGMT-";"UNTAG-";"VLAN-";"SPEED-";"MEDIA-";"ARP-"} do={
+                    :foreach prefix in={"TAGS-";"TAG-";"PVID-";"MGMT-";"UNTAG-";"VLAN-";"SPEED-";"MEDIA-";"ARP-";"NAME-";"ROLE-"} do={
                         :if ([:pick $token 0 [:len $prefix]] = $prefix) do={
                             :set key [:pick $prefix 0 ([:len $prefix] - 1)]
                             :set val [:pick $token [:len $prefix] [:len $token]]
                         }
                     }
                 }
-                :if (($key = "OLT") || ($key = "DOWNLINK") || ($key = "UPLINK")) do={
+                :if (($key = "NAME") || ($key = "ROLE") || ($key = "OLT") || ($key = "DOWNLINK") || ($key = "UPLINK")) do={
                     :set recognized true
                 }
+                :if ($key = "NAME") do={ :set displayName $val }
                 :if ($key = "OLT") do={
-                    :set oltName $val
+                    :set displayName $val
+                    :put ("LEGACY COMMENT " . $name . ": use NAME:" . $val . " instead of OLT:" . $val)
+                }
+                :if ($key = "ROLE") do={
+                    :if (($val != "OLT") && ($val != "UPLINK") && ($val != "DOWNLINK") && ($val != "NAS-LAN") && ($val != "NAS-WAN") && ($val != "MGMT")) do={
+                        :error ("Unrecognized ROLE " . $val . " on " . $name)
+                    }
                 }
                 :if ($key = "ARP") do={
                     :if ($val != "AUTO") do={
@@ -299,13 +320,7 @@
                     :set recognized true
                 }
                 :if ($key = "NAS-LAN") do={
-                    :set recognized true
-                    :if ($val = "AUTO") do={
-                        :set auto "NAS-LAN"
-                    } else={
-                        :local found [$expand $val]
-                        :foreach vid in=[:toarray $found] do={ :set tagged [$append $tagged $vid] }
-                    }
+                    :error ("NAS-LAN:<VLAN> is deprecated on " . $name . "; use NAME:NAS-LAN_TAGS:<VLANs>")
                 }
                 :if ($key = "SPEED") do={
                     :if (($val != "AUTO") && ($val != "10G") && ($val != "1G")) do={
@@ -341,7 +356,7 @@
                     :put ("MGMT UNTAGGED THROUGH PVID: " . $name . " VLAN=" . $mgmtVid)
                 }
             }
-            :if (($comment ~ "^OLT_RESERVED") || ($comment ~ "^OTHER")) do={
+            :if (($comment ~ "^OLT_RESERVED") || ($comment ~ "^OTHER") || ($comment ~ "(^|_)NAME:OLT_RESERVED($|_)") || ($comment ~ "(^|_)NAME:OTHER($|_)")) do={
                 :set recognized false
             }
             :if ($recognized) do={
@@ -364,17 +379,17 @@
                     :local cost 20000
                     :local restriction "yes"
                     :local edgeSetting "yes-discover"
-                    :if ($comment ~ "^UPLINK") do={
+                    :if ($role = "UPLINK") do={
                         :set cost 1
                         :set restriction "no"
                         :set edgeSetting "no"
                     }
-                    :if ($comment ~ "^NAS-LAN") do={
+                    :if ($role = "NAS-LAN") do={
                         :set cost 10000
                         :set restriction "yes"
                         :set edgeSetting "no"
                     }
-                    :if ($comment ~ "^DOWNLINK") do={
+                    :if ($role = "DOWNLINK") do={
                         :set edgeSetting "no"
                     }
                     :set stpCosts ($stpCosts, $cost)
@@ -388,7 +403,7 @@
                             :set arpVlan $tagReference
                         }
                         :if ([:len $arpVlan] = 0) do={
-                            :put ("ARP:AUTO SKIP " . $name . " (" . $oltName . "): no PVID or single TAG reference")
+                            :put ("ARP:AUTO SKIP " . $name . " (" . $displayName . "): no PVID or single TAG reference")
                         }
                     }
                     :set arpVlans ($arpVlans, $arpVlan)
@@ -432,10 +447,10 @@
         :foreach uplinkRow in=[/interface ethernet find] do={
             :local uplinkComment [:tostr [/interface ethernet get $uplinkRow comment]]
             :local physicalName [/interface ethernet get $uplinkRow name]
-            :if ($uplinkComment ~ "^UPLINK") do={
+            :if ([$roleOf $uplinkComment] = "UPLINK") do={
                 :set uplinkPorts [$append $uplinkPorts $physicalName]
             }
-            :if (($uplinkComment ~ "^OLT") || ($uplinkComment ~ "^DOWNLINK")) do={
+            :if (([$roleOf $uplinkComment] = "OLT") || ([$roleOf $uplinkComment] = "DOWNLINK")) do={
                 :set oltFacingPorts [$append $oltFacingPorts $physicalName]
             }
         }
@@ -653,17 +668,17 @@
                     :local phy [/interface ethernet find where name=$pname]
                     :if ([:len $phy] = 1) do={
                         :local pc [/interface ethernet get $phy comment]
-                        :if ($pc ~ "^UPLINK") do={
+                        :if ([$roleOf $pc] = "UPLINK") do={
                             :set desiredCost 1
                             :set desiredRole "no"
                             :set desiredEdge "no"
                         }
-                        :if ($pc ~ "^NAS-LAN") do={
+                        :if ([$roleOf $pc] = "NAS-LAN") do={
                             :set desiredCost 10000
                             :set desiredRole "yes"
                             :set desiredEdge "no"
                         }
-                        :if ($pc ~ "^DOWNLINK") do={
+                        :if ([$roleOf $pc] = "DOWNLINK") do={
                             :set desiredEdge "no"
                         }
                     }
@@ -803,14 +818,14 @@
             :local pname [/interface ethernet get $phys name]
             :local pc [:tostr [/interface ethernet get $phys comment]]
             :local isProtected ([:typeof [:find ("," . $mgmtMembers . ",") ("," . $pname . ",")]] != "nil")
-            :if (($pc ~ "^MGMT") || ($pc ~ "^Management") || ($pname ~ "^MGMT") || ($pname ~ "^Management")) do={
+            :if (($pc ~ "^MGMT") || ($pc ~ "^Management") || ([$roleOf $pc] = "MGMT") || ($pname ~ "^MGMT") || ($pname ~ "^Management")) do={
                 :set isProtected true
             }
             :local known false
             :foreach managedName in=$names do={
                 :if ($managedName = $pname) do={ :set known true }
             }
-            :local explicitDisable (($pc ~ "^OLT_RESERVED") || ($pc ~ "^OTHER"))
+            :local explicitDisable (($pc ~ "^OLT_RESERVED") || ($pc ~ "^OTHER") || ($pc ~ "(^|_)NAME:OLT_RESERVED($|_)") || ($pc ~ "(^|_)NAME:OTHER($|_)"))
             :local hasBridge ([:len [/interface bridge port find where interface=$pname]] > 0)
             :local hasIP ([:len [/ip address find where interface=$pname and disabled=no]] > 0)
             :local isRunning [/interface ethernet get $phys running]
@@ -1002,12 +1017,12 @@
                 :local ethId [/interface ethernet find where name=$name]
                 :if ([:len $ethId] = 1) do={
                     :local c [/interface ethernet get $ethId comment]
-                    :if ($c ~ "^UPLINK") do={
+                    :if ([$roleOf $c] = "UPLINK") do={
                         :set cost 1
                         :set restrictedBoolean false
                         :set edgeSetting "no"
                     }
-                    :if ($c ~ "^NAS-LAN") do={
+                    :if ([$roleOf $c] = "NAS-LAN") do={
                         :set cost 10000
                         :set restrictedBoolean true
                         :set edgeSetting "no"
