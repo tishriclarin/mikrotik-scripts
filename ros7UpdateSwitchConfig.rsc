@@ -169,12 +169,16 @@
 
         :local roleOf do={
             :local c [:tostr $1]
-            :if (($c ~ "(^|_)ROLE:UPLINK($|_)") || ($c ~ "(^|_)NAME:UPLINK($|_)") || ($c ~ "^UPLINK($|_)")) do={ :return "UPLINK" }
-            :if (($c ~ "(^|_)ROLE:NAS-LAN($|_)") || ($c ~ "(^|_)NAME:NAS-LAN($|_)") || ($c ~ "^NAS-LAN:")) do={ :return "NAS-LAN" }
-            :if (($c ~ "(^|_)ROLE:NAS-WAN($|_)") || ($c ~ "(^|_)NAME:NAS-WAN($|_)")) do={ :return "NAS-WAN" }
-            :if (($c ~ "(^|_)ROLE:DOWNLINK($|_)") || ($c ~ "(^|_)NAME:DOWNLINK($|_)") || ([$roleOf $c] = "DOWNLINK")) do={ :return "DOWNLINK" }
-            :if (($c ~ "(^|_)ROLE:MGMT($|_)") || ($c ~ "(^|_)NAME:MGMT($|_)")) do={ :return "MGMT" }
-            :if (($c ~ "(^|_)ROLE:OLT($|_)") || ($c ~ "(^|_)NAME:OLT($|_)") || ($c ~ "^OLT:")) do={ :return "OLT" }
+            :foreach role in={"UPLINK";"NAS-LAN";"NAS-WAN";"DOWNLINK";"MGMT";"OLT"} do={
+                :if ($c ~ ("(^|_)ROLE:" . $role . "($|_)")) do={ :return $role }
+            }
+            :foreach role in={"UPLINK";"NAS-LAN";"NAS-WAN";"DOWNLINK";"MGMT";"OLT"} do={
+                :if ($c ~ ("(^|_)NAME:" . $role . "($|_)")) do={ :return $role }
+            }
+            :if ($c ~ "^UPLINK($|_)") do={ :return "UPLINK" }
+            :if ($c ~ "^DOWNLINK") do={ :return "DOWNLINK" }
+            :if ($c ~ "^OLT:") do={ :return "OLT" }
+            :if ($c ~ "(^|_)NAS-LAN:") do={ :return "NAS-LAN" }
             :if (($c ~ "(^|_)NAME:") && (($c ~ "(^|_)PVID:") || ($c ~ "(^|_)TAG:"))) do={ :return "OLT" }
             :return "OTHER"
         }
@@ -712,7 +716,6 @@
                 :local autoThis [:pick $autos $i]
                 :local explicitly ([:typeof [:find ("," . $tagsThis . ",") ("," . $vid . ",")]] != "nil")
                 :local autoInclude false
-                :if ($autoThis = "NAS-LAN") do={ :set autoInclude true }
                 :if ($autoThis = "UPLINK") do={
                     :if ([:typeof [:find ("," . $oltPvids . ",") ("," . $vid . ",")]] = "nil") do={
                         :set autoInclude true
