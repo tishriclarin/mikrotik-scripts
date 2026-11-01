@@ -109,6 +109,14 @@
         :local bridgeName [/interface bridge get $bridgeId name]
         :local bridgeComment [:tostr [/interface bridge get $bridgeId comment]]
         :local filtering [/interface bridge get $bridgeId vlan-filtering]
+        :local wantFiltering true
+        :local filterNo ($bridgeComment ~ "(^|_)VLAN-FILTERING:NO($|_)")
+        :local filterYes ($bridgeComment ~ "(^|_)VLAN-FILTERING:YES($|_)")
+        :if ($filterNo && $filterYes) do={ :error "Conflicting bridge VLAN-FILTERING values" }
+        :if ($filterNo) do={ :set wantFiltering false }
+        :if (($bridgeComment ~ "(^|_)VLAN-FILTERING:") && (!$filterNo) && (!$filterYes)) do={
+            :error "VLAN-FILTERING accepts only YES or NO"
+        }
         :local wantIgmp true
         :if ($bridgeComment ~ "(^|_)IGMP:NO($|_)") do={
             :set wantIgmp false
@@ -162,9 +170,8 @@
         :put "Use NAS-LAN:<explicit VLAN list> for WAN/subscriber separation."
         :put ("BRIDGE: " . $bridgeName . " vlan-filtering=" . $filtering)
         :put "EXPECTED: vlan-filtering=yes. This script will NOT toggle it remotely."
-        :if (!$filtering) do={
-            :put "WARNING: vlan-filtering=no; configuration will be staged but not effective."
-            :put "This script will NOT enable vlan-filtering."
+        :if (!$filtering && $wantFiltering) do={
+            :put "VLAN FILTERING: currently no; desired yes (preflight required)."
         }
 
         :local roleOf do={
@@ -173,7 +180,7 @@
                 :if ($c ~ ("(^|_)ROLE:" . $role . "($|_)")) do={ :return $role }
             }
             :foreach role in={"UPLINK";"NAS-LAN";"NAS-WAN";"DOWNLINK";"MGMT";"OLT"} do={
-                :if ($c ~ ("(^|_)NAME:" . $role . "($|_)")) do={ :return $role }
+                :if ($c ~ ("(^|_)NAME: *" . $role . "($|_)")) do={ :return $role }
             }
             :if ($c ~ "^UPLINK($|_)") do={ :return "UPLINK" }
             :if ($c ~ "^DOWNLINK") do={ :return "DOWNLINK" }
@@ -430,6 +437,13 @@
         :local actionIds [:toarray ""]
         :local actionValues [:toarray ""]
         :local actionsCount 0
+        :if ($filtering != $wantFiltering) do={
+            :put ("UPDATE BRIDGE VLAN-FILTERING " . $bridgeName . " " . $filtering . " -> " . $wantFiltering . " (apply last)")
+            :set actions ($actions, "VLANFILTER")
+            :set actionIds ($actionIds, $bridgeName)
+            :set actionValues ($actionValues, [:tostr $wantFiltering])
+            :set actionsCount ($actionsCount + 1)
+        }
         :if ($igmpNow != $wantIgmp) do={
             :put ("UPDATE BRIDGE IGMP snooping " . $bridgeName . " " . $igmpNow . " -> " . $wantIgmp)
             :set actions ($actions, "IGMP")
@@ -863,15 +877,8 @@
         :put ("LOOP-PROTECT: " . $loopChanges . " physical Ethernet interfaces need enabling")
         :put "========== ONLY PROPOSED CHANGES ABOVE =========="
         :put ("PLANNED CHANGES: " . $actionsCount)
-        :if (!$filtering) do={
-            :put "BRIDGE DIFFERENCE: vlan-filtering=no, policy expects yes."
-            :put "Enabling VLAN filtering is NOT automatic: verify management first."
-        }
         :if (!$apply) do={ :put "PREVIEW ONLY: NO CHANGES APPLIED"; :return }
         :if ($actionsCount = 0) do={ :put "ALREADY IN SYNC"; :return }
-        :if (!$filtering) do={
-            :error "ABORT: vlan-filtering=no. Enable separately after ensuring management access."
-        }
 
         :local ownsSafe false
         :onerror safetyError in={
@@ -957,6 +964,33 @@
         }
         :put ("PROTECTED MANAGEMENT PORT: " . $protectedPort . " session=" . $client)
         :put ("GATEWAY BASELINE: " . $gateway . " MAC=" . $firstMac . " via=" . $firstIf . " pingReplies=" . $firstPing)
+        :if ($wantFiltering && !$filtering) do={
+            :local cpuReady false
+            :local pathReady false
+            :foreach v in=[/interface vlan find where interface=$bridgeName] do={
+                :local vid [:tostr [/interface vlan get $v vlan-id]]
+                :local vname [/interface vlan get $v name]
+                :if ([:len [/ip address find where interface=$vname and disabled=no]] > 0) do={
+                    :foreach vlanRow in=[/interface bridge vlan find where bridge=$bridgeName] do={
+                        :if (![/interface bridge vlan get $vlanRow disabled]) do={
+                            :local ids [$expand [:tostr [/interface bridge vlan get $vlanRow vlan-ids]]]
+                            :if ([:typeof [:find ("," . $ids . ",") ("," . $vid . ",")]] != "nil") do={
+                                :local staticTagged [:tostr [/interface bridge vlan get $vlanRow tagged]]
+                                :if ([:typeof [:find ("," . $staticTagged . ",") ("," . $bridgeName . ",")]] != "nil") do={
+                                    :set cpuReady true
+                                }
+                                :if ([:typeof [:find ("," . $staticTagged . ",") ("," . $protectedPort . ",")]] != "nil") do={
+                                    :set pathReady true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            :if (!$cpuReady || !$pathReady) do={
+                :error "ABORT: VLAN-FILTERING enable requires existing static MGMT VLAN row tagging bridge CPU and protected management uplink, with active management VLAN IP"
+            }
+        }
 
         :local decision false
         :local pending true
@@ -1103,7 +1137,12 @@
             :if ($action = "SPEED") do={
                 /interface ethernet set [find where name=$name] auto-negotiation=no speed=$value
             }
-            :put ("DONE: " . $action . " " . $name)
+            :if ($action != "VLANFILTER") do={ :put ("DONE: " . $action . " " . $name) }
+            }
+            :if ($filtering != $wantFiltering) do={
+                /interface bridge set $bridgeId vlan-filtering=$wantFiltering
+                :put ("DONE: VLAN-FILTERING " . $bridgeName . "=" . $wantFiltering)
+                :delay 3s
             }
             :local afterPing [/ping address=$gateway count=3]
             :local afterRows [/ip arp find where address=$gateway]
