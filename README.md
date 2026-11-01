@@ -118,3 +118,13 @@ The VLAN/bridge/RSTP settings of interfaces explicitly listed in `MGMT-IF` are p
 **Safety:** `edge=yes` is intended for ports without downstream STP-aware bridges, and `restricted-role=yes` can place a port into discarding state when superior BPDUs are received. These configured preferences do not guarantee which port is elected root; verify the bridge monitor and live forwarding topology. Run a preview first and apply only under interactive Safe Mode with an out-of-band recovery path.
 
 Use `load-ros7UpdateSwitchConfig.rsc` to dry-run and import the main script; call `[$ros7UpdateSwitchConfig false]` for preview and `[$ros7UpdateSwitchConfig true]` to apply after confirmation. Runtime hardware behavior has not been tested on the target switch.
+
+## WAN-side UPLINK and OLT-side NAS-LAN role separation
+
+Network topology clarification: `UPLINK` provides upstream VLAN/gateway connectivity for `NAS-WAN`; `NAS-LAN` carries the subscriber service VLANs toward `OLT` devices. **NAS-LAN is not a backup RSTP root path**.
+
+Current `ros7UpdateSwitchConfig` RSTP policy: `UPLINK` has `edge=no restricted-role=no path-cost=1`, `NAS-LAN` has `edge=no restricted-role=yes path-cost=10000`, `DOWNLINK` has `edge=no restricted-role=yes path-cost=20000`, while `OLT` and other unprotected endpoint-facing ports use `edge=yes-discover restricted-role=yes path-cost=20000`. `MGMT-IF` bridge settings remain protected.
+
+**AUTO VLAN caveat:** The existing `NAS-LAN:AUTO` rule still adds **every discovered VLAN**, including any WAN VLAN; `UPLINK_VLAN:AUTO` still adds tagged/MGMT VLANs while excluding OLT PVIDs. These behaviors were explicitly defined earlier and are **not yet adjusted to enforce strict WAN/subscriber VLAN separation**. Use an explicit numeric `NAS-LAN:...` VLAN list for production isolation until AUTO rules are narrowed. A descriptive `NAS-WAN:LABEL` alone does not identify VLAN IDs.
+
+Spanning tree root selection depends on BPDUs received from a valid upstream switch; configured port costs do not guarantee a root port in an arbitrary topology. Always preview and verify the RSTP bridge monitor and VLAN forwarding before committing.
