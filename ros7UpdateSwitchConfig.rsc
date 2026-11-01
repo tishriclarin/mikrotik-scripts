@@ -883,19 +883,103 @@
             }
         }
         :put ("LOOP-PROTECT: " . $loopChanges . " physical Ethernet interfaces need enabling")
+        :put "========== ONLY PROPOSED CHANGES ABOVE =========="
         :put ("PLANNED CHANGES: " . $actionsCount)
-        :if ($apply && !$filtering) do={
-            :error "ABORT: MAIN-SWITCH vlan-filtering=no. Enable separately after verifying management VLAN access."
+        :if (!$filtering) do={
+            :put "BRIDGE DIFFERENCE: vlan-filtering=no, policy expects yes."
+            :put "Enabling VLAN filtering is NOT automatic: verify management first."
         }
         :if (!$apply) do={ :put "PREVIEW ONLY: NO CHANGES APPLIED"; :return }
         :if ($actionsCount = 0) do={ :put "ALREADY IN SYNC"; :return }
-        :put "WARNING: This can interrupt switching. Use interactive Safe Mode Ctrl+X."
-        :put "Press Y within 30 seconds to apply. Other keys/timeout cancel."
-        :local response 0
-        :onerror e in={
-            :set response [/terminal inkey timeout=30s]
-        } do={ :error ("Interactive confirmation failed: " . $e) }
-        :if (($response != 89) && ($response != 121)) do={ :error "CANCELLED" }
+        :if (!$filtering) do={
+            :error "ABORT: vlan-filtering=no. Enable separately after ensuring management access."
+        }
+
+        # Require terminal-owned Safe Mode; no unsafe remote apply without rollback.
+        :local ownsSafe false
+        :onerror safetyError in={
+            :set ownsSafe [/safe-mode get current]
+        } do={ :error ("ABORT: cannot inspect Safe Mode: " . $safetyError) }
+        :if (!$ownsSafe) do={
+            :error "ABORT: apply requires terminal-owned SAFE MODE (Ctrl+X)"
+        }
+
+        # Identify ONE active client; RouterOS cannot always infer a routed ingress.
+        :local sessions [/user active find]
+        :if ([:len $sessions] != 1) do={ :error "ABORT: cannot uniquely identify active management session" }
+        :local client [:tostr [/user active get [:pick $sessions 0] address]]
+
+        # Select a unique active main-table IPv4 default gateway.
+        :local routes [/ip route find where dst-address="0.0.0.0/0" and active]
+        :local gateway ""
+        :foreach routeId in=$routes do={
+            :if ([/ip route get $routeId routing-table] = "main") do={
+                :if ([:len $gateway] > 0) do={ :error "ABORT: multiple main default gateways" }
+                :set gateway [:tostr [/ip route get $routeId gateway]]
+            }
+        }
+        :if (($gateway = "") || ([:typeof [:find $gateway ","]] != "nil") || ([:typeof [:find $gateway "%"]] != "nil")) do={
+            :error "ABORT: gateway is absent/ambiguous; cannot establish L2 baseline"
+        }
+
+        :local firstPing [/ping address=$gateway count=3]
+        :local arpEntries [/ip arp find where address=$gateway]
+        :if ([:len $arpEntries] != 1) do={ :error "ABORT: no unique gateway ARP entry" }
+        :local arpEntry [:pick $arpEntries 0]
+        :local firstMac [:tostr [/ip arp get $arpEntry mac-address]]
+        :local firstIf [:tostr [/ip arp get $arpEntry interface]]
+        :if ([:len $firstMac] != 17) do={ :error "ABORT: gateway ARP MAC unresolved" }
+
+        # Protect port that carries management. Direct client ARP first;
+        # for routed access use the gateway MAC; ambiguous results abort.
+        :local protectedPort ""
+        :local clientMac ""
+        :local neighbor [/ip arp find where address=$client]
+        :if ([:len $neighbor] = 1) do={
+            :set clientMac [:tostr [/ip arp get [:pick $neighbor 0] mac-address]]
+        }
+        :local pathMac $firstMac
+        :if ([:len $clientMac] = 17) do={ :set pathMac $clientMac }
+        :foreach host in=[/interface bridge host find where bridge=$bridgeName] do={
+            :if ([:tostr [/interface bridge host get $host mac-address]] = $pathMac) do={
+                :local foundPort [:tostr [/interface bridge host get $host on-interface]]
+                :if (($protectedPort != "") && ($protectedPort != $foundPort)) do={
+                    :error "ABORT: multiple possible management ingress ports"
+                }
+                :set protectedPort $foundPort
+            }
+        }
+        :if (($protectedPort = "") && ([:len [/interface ethernet find where name=$firstIf]] = 1)) do={
+            :set protectedPort $firstIf
+        }
+        :if ($protectedPort = "") do={
+            :error "ABORT: physical management path cannot be identified confidently"
+        }
+        :foreach i in=[:toarray $actionIds] do={
+            :if ($i = $protectedPort) do={
+                :error ("ABORT: planned action touches management path " . $protectedPort)
+            }
+        }
+        :put ("PROTECTED MANAGEMENT PORT: " . $protectedPort . " session=" . $client)
+        :put ("GATEWAY BASELINE: " . $gateway . " MAC=" . $firstMac . " via=" . $firstIf . " pingReplies=" . $firstPing)
+
+        # Interactive one-minute Y/N/W confirmation. W extends by another minute.
+        :local decision false
+        :local pending true
+        :while ($pending) do={
+            :put "Press Y=YES, N=NO, W=WAIT another 60 seconds (timeout cancels)."
+            :local key 0
+            :onerror keyError in={ :set key [/terminal inkey timeout=1m] } do={
+                :put ("Timed out or terminal error: " . $keyError)
+            }
+            :if (($key = 87) || ($key = 119)) do={
+                :put "WAIT selected: extending confirmation by 60 seconds"
+            } else={
+                :set pending false
+                :if (($key = 89) || ($key = 121)) do={ :set decision true }
+            }
+        }
+        :if (!$decision) do={ :error "CANCELLED: no YES approval" }
 
         :local password ""
         :global ros7SwitchBackupPassword
