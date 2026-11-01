@@ -169,3 +169,17 @@ For interface comments, `MGMT:101` is tagged by default. `MGMT:101_UNTAG:101` as
 Example: `OLT:AREA1_PVID:51_MGMT:101_UNTAG:101_TAGS:10,11,12` gives untagged VLAN 51, tagged VLANs 101/10/11/12, and no second untagged VLAN.
 
 Run `load-ros7UpdateSwitchConfig.rsc` to dry-run the main script before import, then `[$ros7UpdateSwitchConfig false]` for a read-only preview. Do not apply until interface VLAN membership and RSTP roles have been reviewed.
+
+## Management session and interface protection for ros7UpdateSwitchConfig
+
+Before **apply**, the switch must be in interactive Safe Mode and have exactly one active management session. The session's IPv4 source address must be covered by an entry in one of the following **/ip firewall address-list** names (including a host inside a CIDR entry):
+
+`MGMT`, `REMOTE-MGMT`, `MANAGEMENT`, `REMOTE-MANAGEMENT`, `REMOTE_MANAGEMENT`.
+
+The script also protects statically configured members of these **/interface list** names:
+
+`MGMT-IF`, `MGMT`, `MANAGEMENT`.
+
+Any of those interface lists using `include` or `exclude` is considered ambiguous and aborts. Management list membership on a bridge or VLAN does not identify the physical access port; the script additionally attempts to resolve the actual ingress through ARP and the bridge forwarding database. If it cannot identify a unique physical path, or if a planned action directly touches that path, apply aborts. Management members are exempted from the blanket loop-protection update to avoid inadvertently changing a live management interface.
+
+The management address-list match **authorizes the source address only**; it does not inherently prove that the current terminal corresponds to a particular physical port. Multiple active sessions therefore fail closed rather than selecting one. The pre/post default-gateway ARP and ping tests are management reachability probes, not proof of subscriber forwarding. Existing Safe Mode failure handling attempts to unroll changes, but requires validation on the target RouterOS build. A remote change should still have an independent recovery path.
