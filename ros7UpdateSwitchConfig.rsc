@@ -328,6 +328,20 @@
             :local name [:pick $names $i]
             :local pvid [:pick $pvids $i]
             :local accessOnly ([:typeof [:find ("," . $accessPorts . ",") ("," . $name . ",")]] != "nil")
+            :local tagHere [:pick $tags $i]
+            :local autoHere [:pick $autos $i]
+            :local frameDesired ""
+            :if ($accessOnly) do={
+                :set frameDesired "admit-only-untagged-and-priority-tagged"
+            } else={
+                :if (([:len $tagHere] > 0) || ([:len $autoHere] > 0)) do={
+                    :if ([:len $pvid] > 0) do={
+                        :set frameDesired "admit-all"
+                    } else={
+                        :set frameDesired "admit-only-vlan-tagged"
+                    }
+                }
+            }
             :local wantedCost [:pick $stpCosts $i]
             :local wantedRole [:pick $stpRoles $i]
             :local wantedEdge [:pick $stpEdges $i]
@@ -377,6 +391,17 @@
                     :set actionValues ($actionValues, ([:tostr $wantedCost] . ":" . $wantedRole . ":" . $wantedEdge))
                     :set actionsCount ($actionsCount + 1)
                 }
+                :if (!$accessOnly && ([:len $frameDesired] > 0)) do={
+                    :local currentFrame [:tostr [/interface bridge port get $existing frame-types]]
+                    :local currentIngress [/interface bridge port get $existing ingress-filtering]
+                    :if (($currentFrame != $frameDesired) || (!$currentIngress)) do={
+                        :put ("SET FRAMES " . $name . " " . $frameDesired . " ingress-filtering=yes")
+                        :set actions ($actions, "FRAMES")
+                        :set actionIds ($actionIds, $name)
+                        :set actionValues ($actionValues, $frameDesired)
+                        :set actionsCount ($actionsCount + 1)
+                    }
+                }
                 :if ($accessOnly) do={
                     :local curPvid [:tostr [/interface bridge port get $existing pvid]]
                     :local curFrames [:tostr [/interface bridge port get $existing frame-types]]
@@ -407,6 +432,13 @@
                 :set actionIds ($actionIds, $name)
                 :set actionValues ($actionValues, $pvid)
                 :set actionsCount ($actionsCount + 1)
+                :if (!$accessOnly && ([:len $frameDesired] > 0)) do={
+                    :put ("SET FRAMES AFTER ADD " . $name . " " . $frameDesired)
+                    :set actions ($actions, "FRAMES")
+                    :set actionIds ($actionIds, $name)
+                    :set actionValues ($actionValues, $frameDesired)
+                    :set actionsCount ($actionsCount + 1)
+                }
             }
         }
 
@@ -728,6 +760,11 @@
                     :error ("Missing bridge port " . $name)
                 }
                 /interface bridge port set $bridgePort path-cost=$cost restricted-role=($restriction = "yes") edge=$edgeSetting
+            }
+            :if ($action = "FRAMES") do={
+                :local bp [/interface bridge port find where interface=$name and bridge=$bridgeName]
+                :if ([:len $bp] != 1) do={ :error ("FRAMES target missing: " . $name) }
+                /interface bridge port set $bp frame-types=$value ingress-filtering=yes
             }
             :if ($action = "ACCESS") do={
                 :local bridgePort [/interface bridge port find where interface=$name and bridge=$bridgeName]
