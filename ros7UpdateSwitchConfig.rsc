@@ -91,6 +91,30 @@
         :local bridgeId [:pick $bridges 0]
         :local bridgeName [/interface bridge get $bridgeId name]
         :local filtering [/interface bridge get $bridgeId vlan-filtering]
+        :local protocol [/interface bridge get $bridgeId protocol-mode]
+        :if ($protocol != "rstp") do={
+            :error ("MAIN-SWITCH must use rstp; existing protocol-mode=" . $protocol)
+        }
+        # Identity hierarchy: CORE-SW_SW:0, ISULAN-DSW_SW:1, etc.
+        :local identity [/system identity get name]
+        :if (($identity ~ "_SW:[0-9]+$") = false) do={
+            :error ("ABORT: Identity must end with _SW:<level>, e.g. CORE-SW_SW:0; current=" . $identity)
+        }
+        :local marker [:find $identity "_SW:"]
+        :if ([:typeof $marker] = "nil") do={
+            :error ("ABORT: Missing SW level in identity " . $identity)
+        }
+        :local hopLevel [:tonum [:pick $identity ($marker + 4) [:len $identity]]]
+        :if (([:typeof $hopLevel] != "num") || ($hopLevel > 15) || ($hopLevel < 0)) do={
+            :error ("ABORT: SW level must be between 0 and 15, got " . $identity)
+        }
+        :local desiredPriority ($hopLevel * 4096)
+        :local currentPriority [/interface bridge get $bridgeId priority]
+        :put ("RSTP HIERARCHY: " . $identity . " level=" . $hopLevel . " priority=" . $desiredPriority)
+        :put "Port path-cost: UPLINK=1, others=20000; OLT/DOWNLINK restricted-role=yes"
+        :if ($hopLevel = 0) do={
+            :put "CORE LEVEL 0: root bridge has no root port."
+        }
         :put ("BRIDGE: " . $bridgeName . " vlan-filtering=" . $filtering)
         :if (!$filtering) do={
             :put "WARNING: vlan-filtering=no; configuration will be staged but not effective."
@@ -118,6 +142,8 @@
         :local autos [:toarray ""]
         :local speeds [:toarray ""]
         :local mediaTypes [:toarray ""]
+        :local stpCosts [:toarray ""]
+        :local stpRoles [:toarray ""]
         :local universe ""
         :local oltPvids ""
 
@@ -215,6 +241,17 @@
                     :set autos ($autos, $auto)
                     :set speeds ($speeds, $speed)
                     :set mediaTypes ($mediaTypes, $media)
+                    :local cost 20000
+                    :local restriction "keep"
+                    :if ($comment ~ "^UPLINK") do={
+                        :set cost 1
+                        :set restriction "no"
+                    }
+                    :if (($comment ~ "^OLT") || ($comment ~ "^DOWNLINK")) do={
+                        :set restriction "yes"
+                    }
+                    :set stpCosts ($stpCosts, $cost)
+                    :set stpRoles ($stpRoles, $restriction)
                     :foreach id in=[:toarray $tagged] do={ :set universe [$append $universe $id] }
                     :if ([:len $pvid] > 0) do={
                         :set universe [$append $universe $pvid]
@@ -226,7 +263,7 @@
 
         # Validate parallel arrays before referencing them by index.
         :local n [:len $names]
-        :if (([:len $pvids] != $n) || ([:len $tags] != $n) || ([:len $autos] != $n) || ([:len $speeds] != $n) || ([:len $mediaTypes] != $n)) do={
+        :if (([:len $pvids] != $n) || ([:len $tags] != $n) || ([:len $autos] != $n) || ([:len $speeds] != $n) || ([:len $mediaTypes] != $n) || ([:len $stpCosts] != $n) || ([:len $stpRoles] != $n)) do={
             :error "ABORT: Internal port metadata array length mismatch"
         }
         :if ($n = 0) do={ :error "No recognized interface comments on this switch" }
@@ -235,17 +272,45 @@
         :local actionIds [:toarray ""]
         :local actionValues [:toarray ""]
         :local actionsCount 0
+        :if ($currentPriority != $desiredPriority) do={
+            :put ("SET BRIDGE RSTP PRIORITY " . $bridgeName . ": " . $currentPriority . " -> " . $desiredPriority)
+            :set actions ($actions, "BRIDGEPRIORITY")
+            :set actionIds ($actionIds, $bridgeName)
+            :set actionValues ($actionValues, [:tostr $desiredPriority])
+            :set actionsCount ($actionsCount + 1)
+        }
 
         # Compare bridge membership and explicit PVID.
         :for i from=0 to=($n - 1) do={
             :local name [:pick $names $i]
             :local pvid [:pick $pvids $i]
+            :local wantedCost [:pick $stpCosts $i]
+            :local wantedRole [:pick $stpRoles $i]
             :local existing [/interface bridge port find where interface=$name]
             :if ([:len $existing] > 1) do={ :error ("Duplicate bridge ports: " . $name) }
             :if ([:len $existing] = 1) do={
                 :local onBridge [/interface bridge port get $existing bridge]
                 :if ($onBridge != $bridgeName) do={
                     :error ("ABORT: " . $name . " already belongs to bridge " . $onBridge)
+                }
+                :local existingCost [/interface bridge port get $existing path-cost]
+                :local existingRole [/interface bridge port get $existing restricted-role]
+                :local needStp false
+                :if ([:tostr $existingCost] != [:tostr $wantedCost]) do={
+                    :set needStp true
+                }
+                :if ($wantedRole = "yes") do={
+                    :if (!$existingRole) do={ :set needStp true }
+                }
+                :if ($wantedRole = "no") do={
+                    :if ($existingRole) do={ :set needStp true }
+                }
+                :if ($needStp) do={
+                    :put ("UPDATE RSTP " . $name . " cost=" . $wantedCost . " restricted-role=" . $wantedRole)
+                    :set actions ($actions, "RSTP")
+                    :set actionIds ($actionIds, $name)
+                    :set actionValues ($actionValues, ([:tostr $wantedCost] . ":" . $wantedRole))
+                    :set actionsCount ($actionsCount + 1)
                 }
                 :if ([:len $pvid] > 0) do={
                     :if ([:tostr [/interface bridge port get $existing pvid]] != $pvid) do={
@@ -420,11 +485,50 @@
             :local action [:pick $actions $i]
             :local name [:pick $actionIds $i]
             :local value [:pick $actionValues $i]
+            :if ($action = "BRIDGEPRIORITY") do={
+                /interface bridge set $bridgeId priority=[:tonum $value]
+            }
             :if ($action = "PORT") do={
-                :if ($value = "") do={
-                    /interface bridge port add bridge=$bridgeName interface=$name
+                :local cost 20000
+                :local restricted "keep"
+                :local ethId [/interface ethernet find where name=$name]
+                :if ([:len $ethId] = 1) do={
+                    :local c [/interface ethernet get $ethId comment]
+                    :if ($c ~ "^UPLINK") do={
+                        :set cost 1
+                        :set restricted "no"
+                    }
+                    :if (($c ~ "^OLT") || ($c ~ "^DOWNLINK")) do={
+                        :set restricted "yes"
+                    }
+                }
+                :if (($restricted = "no") || ($restricted = "yes")) do={
+                    :if ($value = "") do={
+                        /interface bridge port add bridge=$bridgeName interface=$name path-cost=$cost restricted-role=($restricted = "yes")
+                    } else={
+                        /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost restricted-role=($restricted = "yes")
+                    }
                 } else={
-                    /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value]
+                :if ($value = "") do={
+                    /interface bridge port add bridge=$bridgeName interface=$name path-cost=$cost
+                } else={
+                    /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost
+                }
+                }
+            }
+            :if ($action = "RSTP") do={
+                :local sep [:find $value ":"]
+                :if ([:typeof $sep] = "nil") do={ :error "Invalid RSTP planned action" }
+                :local cost [:tonum [:pick $value 0 $sep]]
+                :local restriction [:pick $value ($sep + 1) [:len $value]]
+                :local bridgePort [/interface bridge port find where interface=$name and bridge=$bridgeName]
+                :if ([:len $bridgePort] != 1) do={
+                    :error ("Missing bridge port " . $name)
+                }
+                :if ($restriction = "keep") do={
+                    /interface bridge port set $bridgePort path-cost=$cost
+                } else={
+                    /interface bridge port set $bridgePort path-cost=$cost restricted-role=($restriction = "yes")
                 }
             }
             :if ($action = "PVID") do={
@@ -444,7 +548,10 @@
             }
             :put ("DONE: " . $action . " " . $name)
         }
-        :put "CONFIG UPDATE COMPLETE. Verify bridge VLAN table and link status before Safe Mode commit."
+        :put "CONFIG UPDATE COMPLETE. Verify VLANs, root port, and link status before Safe Mode commit."
+        :put ("Identity SW level " . $hopLevel . " is manually declared; NOT measured hop count.")
+        :put ("Bridge RSTP root-port and root-path-cost check:")
+        /interface bridge monitor $bridgeName once
     }
 }
 /system script run ros7UpdateSwitchConfig
