@@ -111,8 +111,8 @@
         :local desiredPriority ($hopLevel * 4096)
         :local currentPriority [/interface bridge get $bridgeId priority]
         :put ("RSTP HIERARCHY: " . $identity . " level=" . $hopLevel . " priority=" . $desiredPriority)
-        :put "Root-port candidates: UPLINK cost=1, NAS-LAN backup cost=10000, others cost=20000"
-        :put "UPLINK and NAS-LAN: edge=no restricted-role=no; all other unprotected bridge ports: edge=yes restricted-role=yes."
+        :put "Only UPLINK is an allowed root-port path (cost 1); NAS-LAN serves the OLT gateway (cost 10000, root guarded)."
+        :put "UPLINK: edge=no role=no; NAS-LAN: edge=no role=yes; DOWNLINK: edge=no role=yes; OLT/other: edge=yes-discover role=yes."
         :if ($hopLevel = 0) do={
             :put "CORE LEVEL 0: root bridge has no root port."
         }
@@ -251,7 +251,7 @@
                     :set mediaTypes ($mediaTypes, $media)
                     :local cost 20000
                     :local restriction "yes"
-                    :local edgeSetting "yes"
+                    :local edgeSetting "yes-discover"
                     :if ($comment ~ "^UPLINK") do={
                         :set cost 1
                         :set restriction "no"
@@ -259,7 +259,10 @@
                     }
                     :if ($comment ~ "^NAS-LAN") do={
                         :set cost 10000
-                        :set restriction "no"
+                        :set restriction "yes"
+                        :set edgeSetting "no"
+                    }
+                    :if ($comment ~ "^DOWNLINK") do={
                         :set edgeSetting "no"
                     }
                     :set stpCosts ($stpCosts, $cost)
@@ -398,7 +401,7 @@
                 :if (!$managed) do={
                     :local desiredCost 20000
                     :local desiredRole "yes"
-                    :local desiredEdge "yes"
+                    :local desiredEdge "yes-discover"
                     :local phy [/interface ethernet find where name=$pname]
                     :if ([:len $phy] = 1) do={
                         :local pc [/interface ethernet get $phy comment]
@@ -409,7 +412,10 @@
                         }
                         :if ($pc ~ "^NAS-LAN") do={
                             :set desiredCost 10000
-                            :set desiredRole "no"
+                            :set desiredRole "yes"
+                            :set desiredEdge "no"
+                        }
+                        :if ($pc ~ "^DOWNLINK") do={
                             :set desiredEdge "no"
                         }
                     }
@@ -613,7 +619,7 @@
             :if (($action = "PORT") || ($action = "PORTACCESS")) do={
                 :local cost 20000
                 :local restrictedBoolean true
-                :local edgeSetting "yes"
+                :local edgeSetting "yes-discover"
                 :local ethId [/interface ethernet find where name=$name]
                 :if ([:len $ethId] = 1) do={
                     :local c [/interface ethernet get $ethId comment]
@@ -624,7 +630,10 @@
                     }
                     :if ($c ~ "^NAS-LAN") do={
                         :set cost 10000
-                        :set restrictedBoolean false
+                        :set restrictedBoolean true
+                        :set edgeSetting "no"
+                    }
+                    :if ($c ~ "^DOWNLINK") do={
                         :set edgeSetting "no"
                     }
                 }
@@ -649,7 +658,7 @@
                 :local cost [:tonum [:pick $value 0 $firstColon]]
                 :local restriction [:pick $value ($firstColon + 1) $secondColon]
                 :local edgeSetting [:pick $value ($secondColon + 1) [:len $value]]
-                :if ((($restriction != "yes") && ($restriction != "no")) || (($edgeSetting != "yes") && ($edgeSetting != "no"))) do={
+                :if ((($restriction != "yes") && ($restriction != "no")) || (($edgeSetting != "yes") && ($edgeSetting != "no") && ($edgeSetting != "yes-discover"))) do={
                     :error ("Invalid RSTP state: " . $value)
                 }
                 :local bridgePort [/interface bridge port find where interface=$name and bridge=$bridgeName]
@@ -692,7 +701,7 @@
         :put "CONFIG UPDATE COMPLETE. Verify VLANs, root port, and link status before Safe Mode commit."
         :put ("Identity SW level " . $hopLevel . " is manually declared; NOT measured hop count.")
         :put ("Bridge RSTP root-port and root-path-cost check:")
-        :put "UPLINK is preferred; NAS-LAN is fallback only if it receives a suitable upstream BPDU."
+        :put "UPLINK alone is root-port eligible. NAS-LAN is a protected subscriber gateway-facing port, not an STP backup."
         :put "RSTP path cost cannot guarantee root-port choice against arbitrary advertised upstream costs."
         /interface bridge monitor $bridgeName once
     }
