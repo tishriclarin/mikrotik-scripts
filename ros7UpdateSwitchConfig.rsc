@@ -162,6 +162,9 @@
             :local comment [:tostr [/interface ethernet get $eth comment]]
             :local rest $comment
             :local pvid ""
+            :local explicitPvid ""
+            :local untagRequest ""
+            :local mgmtVlans ""
             :local tagged ""
             :local auto ""
             :local speed "AUTO"
@@ -189,7 +192,7 @@
                     :set val [:pick $token ($colon + 1) [:len $token]]
                 } else={
                     # Hyphen separator applies only to known argument keys.
-                    :foreach prefix in={"TAGS-";"TAG-";"PVID-";"MGMT-";"VLAN-";"SPEED-";"MEDIA-";"ARP-"} do={
+                    :foreach prefix in={"TAGS-";"TAG-";"PVID-";"MGMT-";"UNTAG-";"VLAN-";"SPEED-";"MEDIA-";"ARP-"} do={
                         :if ([:pick $token 0 [:len $prefix]] = $prefix) do={
                             :set key [:pick $prefix 0 ([:len $prefix] - 1)]
                             :set val [:pick $token [:len $prefix] [:len $token]]
@@ -220,6 +223,17 @@
                     :set tagged [$append $tagged $found]
                     :set recognized true
                 }
+                :if ($key = "UNTAG") do={
+                    :local requested [$expand $val]
+                    :if ([:len [:toarray $requested]] != 1) do={
+                        :error ("UNTAG requires exactly one VLAN on " . $name)
+                    }
+                    :if (([:len $untagRequest] > 0) && ($untagRequest != $requested)) do={
+                        :error ("Conflicting UNTAG values on " . $name)
+                    }
+                    :set untagRequest $requested
+                    :set recognized true
+                }
                 :if (($key = "TAGS") || ($key = "MGMT") || ($key = "VLAN")) do={
                     :if ($val = "AUTO") do={
                         :if ($key != "VLAN") do={ :error ("AUTO invalid for " . $key . " on " . $name) }
@@ -227,11 +241,12 @@
                     } else={
                         :local found [$expand $val]
                         :foreach vid in=[:toarray $found] do={
-                            :set tagged [$append $tagged $vid]
-                            # MGMT VLANs are additional ARP:AUTO scan targets,
-                            # independently of PVID or singular TAG.
                             :if ($key = "MGMT") do={
+                                # Resolve tagged/untagged status after parsing PVID and UNTAG.
+                                :set mgmtVlans [$append $mgmtVlans $vid]
                                 :set mgmtArpVlans [$append $mgmtArpVlans $vid]
+                            } else={
+                                :set tagged [$append $tagged $vid]
                             }
                         }
                     }
@@ -240,6 +255,10 @@
                 :if ($key = "PVID") do={
                     :local found [$expand $val]
                     :if ([:len [:toarray $found]] != 1) do={ :error ("PVID must be one VLAN: " . $name) }
+                    :if (([:len $explicitPvid] > 0) && ($explicitPvid != $found)) do={
+                        :error ("Conflicting PVID values on " . $name)
+                    }
+                    :set explicitPvid $found
                     :set pvid $found
                     :set recognized true
                 }
@@ -266,6 +285,29 @@
                     :set media $val
                 }
                 # NAS-WAN:ISULAN-NAS is a descriptive marker, never a VLAN number.
+            }
+            # Explicit PVID overrides UNTAG regardless of comment-token order.
+            # UNTAG is only a management VLAN untagging selector.
+            :if ([:len $untagRequest] > 0) do={
+                :if ([:typeof [:find ("," . $mgmtVlans . ",") ("," . $untagRequest . ",")]] = "nil") do={
+                    :error ("UNTAG:" . $untagRequest . " has no matching MGMT VLAN on " . $name)
+                }
+                :if ([:len $explicitPvid] = 0) do={
+                    :set pvid $untagRequest
+                    :put ("MGMT UNTAG SELECTED: " . $name . " pvid=" . $pvid)
+                } else={
+                    :if ($explicitPvid != $untagRequest) do={
+                        :put ("PVID PRIORITY: " . $name . " PVID=" . $explicitPvid . " overrides UNTAG=" . $untagRequest . "; management stays tagged")
+                    }
+                }
+            }
+            # Management VLANs are tagged except the single effective PVID.
+            :foreach mgmtVid in=[:toarray $mgmtVlans] do={
+                :if ($mgmtVid != $pvid) do={
+                    :set tagged [$append $tagged $mgmtVid]
+                } else={
+                    :put ("MGMT UNTAGGED THROUGH PVID: " . $name . " VLAN=" . $mgmtVid)
+                }
             }
             :if (($comment ~ "^OLT_RESERVED") || ($comment ~ "^OTHER")) do={
                 :set recognized false
@@ -309,9 +351,10 @@
                     :set stpEdges ($stpEdges, $edgeSetting)
                     :local arpVlan ""
                     :if ($isOlt) do={
-                        # PVID takes precedence; otherwise use single TAG reference.
-                        :if ([:len $pvid] > 0) do={
-                            :set arpVlan $pvid
+                        # ARP service reference uses explicit PVID; otherwise TAG.
+                        # A fallback UNTAG management PVID must not override TAG.
+                        :if ([:len $explicitPvid] > 0) do={
+                            :set arpVlan $explicitPvid
                         } else={
                             :set arpVlan $tagReference
                         }
