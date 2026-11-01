@@ -86,9 +86,25 @@
             :return $result
         }
 
-        :local bridges [/interface bridge find where comment="MAIN-SWITCH"]
-        :if ([:len $bridges] != 1) do={ :error "Expected exactly one bridge with comment MAIN-SWITCH" }
-        :local bridgeId [:pick $bridges 0]
+        # If there is only one bridge, treat it as MAIN-SWITCH even without a comment.
+        # With multiple bridges, require one uniquely marked MAIN-SWITCH.
+        :local allBridges [/interface bridge find]
+        :local bridgeTotal [:len $allBridges]
+        :if ($bridgeTotal = 0) do={
+            :error "ABORT: No bridge exists on this switch"
+        }
+        :local bridgeId ""
+        :if ($bridgeTotal = 1) do={
+            :set bridgeId [:pick $allBridges 0]
+            :put "MAIN-SWITCH auto-detected: only one bridge exists."
+        } else={
+            :local matches [/interface bridge find where comment="MAIN-SWITCH"]
+            :if ([:len $matches] != 1) do={
+                :error ("ABORT: " . $bridgeTotal . " bridges exist; exactly one must have comment MAIN-SWITCH")
+            }
+            :set bridgeId [:pick $matches 0]
+            :put "MAIN-SWITCH selected using bridge comment."
+        }
         :local bridgeName [/interface bridge get $bridgeId name]
         :local filtering [/interface bridge get $bridgeId vlan-filtering]
         :local protocol [/interface bridge get $bridgeId protocol-mode]
