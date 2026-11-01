@@ -209,16 +209,10 @@
     :local desiredPriority ($hopLevel * 4096)
     :local currentPriority [/interface bridge get $bridgeId priority]
     :if ($swReady) do={ :put ("SW level=" . $hopLevel . " desired bridge priority=" . $desiredPriority) }
-    :put "Only UPLINK is an allowed root-port path (cost 1); NAS-LAN serves the OLT gateway (cost 10000, root guarded)."
-    :put "Comments: use NAME:XXX for port identity, TAGS:... for VLAN membership; ROLE:OLT optional if service VLAN is not explicit."
     :put "UPLINK: edge=no role=no; NAS-LAN: edge=no role=yes; DOWNLINK: edge=no role=yes; OLT/other: edge=yes-discover role=yes."
     :if ($swReady && ($hopLevel = 0)) do={
         :put "CORE LEVEL 0: root bridge has no root port."
     }
-    :put "TOPOLOGY: UPLINK supplies VLAN/gateway access to NAS-WAN."
-    :put "TOPOLOGY: NAS-LAN carries the OLT subscriber service VLANs."
-    :put "NAS-LAN uses TAGS for explicit subscriber VLAN membership."
-    :put "Separate WAN VLANs from subscriber VLANs with explicit TAGS lists."
     :put ("BRIDGE: " . $bridgeName . " vlan-filtering=" . $filtering)
     :put "VLAN-FILTERING follows bridge comment, with guarded apply-last behavior."
     :if (!$filtering && $wantFiltering) do={
