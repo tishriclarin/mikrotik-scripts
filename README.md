@@ -143,3 +143,15 @@ For `ARP:AUTO`, the VLAN reference is chosen from **PVID** (if present), otherwi
 `ARP:AUTO` currently **only discovers and displays** candidate `C0:FF:EE` / `C0:FE:EE` MACs learned on UPLINK in the chosen VLAN and checks for an already observed IP-to-MAC mapping on a corresponding VLAN interface. It does not create static ARP entries, because a bridge-learned MAC does not prove an IP-to-MAC association. Static ARP must be applied on the appropriate Layer 3 gateway after verifying the mapping.
 
 Always use the `load-ros7UpdateSwitchConfig.rsc` dry-run loader and preview first; hardware and execution behavior remain untested on production switches.
+
+## ARP:AUTO also scans MGMT VLANs
+
+`ros7UpdateSwitchConfig` treats `MGMT:<vlan>` as an additional ARP:AUTO discovery target. A comment such as:
+
+    OLT:AREA1_PVID:51_MGMT:101_TAGS:10,11,12_ARP:AUTO
+
+scans VLAN 51 as the OLT service reference and VLAN 101 as the management reference. `OLT:AREA1_TAG:51_MGMT:101_TAGS:10,11,12_ARP:AUTO` uses tagged VLAN 51 instead of PVID. Repeated management VLANs across ports are deduplicated.
+
+The script looks for MAC prefixes **`C0:FF:EE`** or **`C0:FE:EE`** (digit zero, not letter O). Service VLAN scanning considers upstream UPLINK ports; MGMT VLAN scanning also considers OLT and DOWNLINK-facing ports, where OLT management MACs may actually be learned. It reports correlations only when an existing IP ARP entry matches a VLAN interface attached to `MAIN-SWITCH`. This is read-only discovery. **It does not create static ARP entries from learned MACs**. Static ARP belongs on the L3 gateway and requires a verified IP, MAC, and interface.
+
+This feature does not modify the protected `MGMT-IF` interface-list members or their bridge/RSTP configuration. Validate with `load-ros7UpdateSwitchConfig.rsc` and preview before any live apply.
