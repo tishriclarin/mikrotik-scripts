@@ -30,6 +30,17 @@ Display a detection result such as `DETECT: ether8 [method=highest-numbered-copp
 
 For an automatic cutover, do not silently set `UPLINK` or the selected `DETECT` port's PVID from the fallback until the migration transaction and watchdog have captured the exact original values and supplied a reliable recovery path.
 
+The read-only detector is available as [`ros7DetectManagementPort.rsc`](../ros7DetectManagementPort.rsc) with its SHA-512 sidecar. Importing it registers a global function, then:
+
+```routeros
+:global ros7DetectManagementPort
+:local managementPort [$ros7DetectManagementPort]
+:put ("Proposed management/Etherboot access port: " . $managementPort)
+```
+
+Its output includes the discovery method and copper candidate list when fallback is needed. It does **not** modify any interface or prove the current session path. The management-VLAN migration script/watchdog is still unimplemented; wire this helper in only after validating its result on the specific CRS model.
+
+
 ## Initial state and staged configuration
 
 - Select the only existing bridge, or uniquely labeled bridge; never change another bridge silently. If no bridge exists, use a separate first-provisioning process with explicit port assignments.
