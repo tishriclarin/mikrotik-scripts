@@ -224,7 +224,11 @@
             }
         }
 
+        # Validate parallel arrays before referencing them by index.
         :local n [:len $names]
+        :if (([:len $pvids] != $n) || ([:len $tags] != $n) || ([:len $autos] != $n) || ([:len $speeds] != $n) || ([:len $mediaTypes] != $n)) do={
+            :error "ABORT: Internal port metadata array length mismatch"
+        }
         :if ($n = 0) do={ :error "No recognized interface comments on this switch" }
         :put ("MANAGED PORTS: " . $n . " VLAN UNIVERSE: " . $universe)
         :local actions [:toarray ""]
@@ -356,7 +360,10 @@
                     :if ($speed = "1G") do={ :set mode "1G-baseT-full" } else={ :set mode "10G-baseT" }
                 }
                 :if ($mode = "") do={
-                    :error ("SPEED:" . $speed . " on " . $name . " requires MEDIA:OPTICAL, MEDIA:DAC or MEDIA:COPPER")
+                    :put ("SPEED REVIEW: " . $name . " requires MEDIA:OPTICAL, MEDIA:DAC or MEDIA:COPPER")
+                    :if ($apply) do={
+                        :error ("SPEED:" . $speed . " needs explicit MEDIA on " . $name)
+                    }
                 }
                 :local eth [/interface ethernet find where name=$name]
                 :local actualSpeed [:tostr [/interface ethernet get $eth speed]]
