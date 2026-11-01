@@ -154,6 +154,7 @@
         :local arpVlans [:toarray ""]
         :local universe ""
         :local oltPvids ""
+        :local mgmtArpVlans ""
         :local accessPorts ""
 
         :foreach eth in=[/interface ethernet find] do={
@@ -227,6 +228,11 @@
                         :local found [$expand $val]
                         :foreach vid in=[:toarray $found] do={
                             :set tagged [$append $tagged $vid]
+                            # MGMT VLANs are additional ARP:AUTO scan targets,
+                            # independently of PVID or singular TAG.
+                            :if ($key = "MGMT") do={
+                                :set mgmtArpVlans [$append $mgmtArpVlans $vid]
+                            }
                         }
                     }
                     :set recognized true
@@ -345,7 +351,7 @@
 
         # ARP:AUTO discovery: OLT:AREA1 is a label, not a VLAN.
         # Reference VLAN = PVID if present, otherwise singular TAG.
-        # TAGS:... and MGMT:... are not ARP reference selectors.
+        # TAGS:... is not an OLT ARP reference; MGMT:... supplies additional ARP scan VLANs.
         # Filter for C0:FF:EE and C0:FE:EE (digit zero), learned on UPLINK.
         # Static ARP requires IP+MAC+L3 interface; a bridge FDB alone cannot
         # supply a trustworthy IP. This stage intentionally does NOT write ARP.
@@ -356,23 +362,49 @@
                 :set uplinkPorts [$append $uplinkPorts [/interface ethernet get $uplinkRow name]]
             }
         }
-        :for scanIndex from=0 to=($n - 1) do={
-            :local oltVlan [:pick $arpVlans $scanIndex]
-            :local srcName [:pick $names $scanIndex]
-            :if ([:len $oltVlan] > 0) do={
-                :put ("ARP:AUTO SCAN OLT " . $srcName . " on PVID/TAG VLAN " . $oltVlan)
+        # Include both OLT PVID/TAG references and MGMT VLANs.
+        # Deduplicate VLANs so MGMT:101 repeated across ports is inspected once.
+        :local scanVlans [:toarray ""]
+        :local scanKinds [:toarray ""]
+        :local uniqueScan ""
+        :for index from=0 to=($n - 1) do={
+            :local oltVid [:pick $arpVlans $index]
+            :if ([:len $oltVid] > 0) do={
+                :if ([:typeof [:find ("," . $uniqueScan . ",") ("," . $oltVid . ",")]] = "nil") do={
+                    :set uniqueScan [$append $uniqueScan $oltVid]
+                    :set scanVlans ($scanVlans, $oltVid)
+                    :set scanKinds ($scanKinds, ("OLT PVID/TAG from " . [:pick $names $index]))
+                }
+            }
+        }
+        :foreach mgmtVid in=[:toarray $mgmtArpVlans] do={
+            :if ([:typeof [:find ("," . $uniqueScan . ",") ("," . $mgmtVid . ",")]] = "nil") do={
+                :set uniqueScan [$append $uniqueScan $mgmtVid]
+                :set scanVlans ($scanVlans, $mgmtVid)
+                :set scanKinds ($scanKinds, "MGMT")
+            } else={
+                :put ("ARP:AUTO MGMT VLAN " . $mgmtVid . " included in existing VLAN scan")
+            }
+        }
+        :local scanCount [:len $scanVlans]
+        :if ($scanCount > 0) do={
+            :for scanIndex from=0 to=($scanCount - 1) do={
+                :local scanVlan [:pick $scanVlans $scanIndex]
+                :local scanKind [:pick $scanKinds $scanIndex]
+                :put ("ARP:AUTO SCAN " . $scanKind . " VLAN " . $scanVlan)
                 :local seen 0
                 :local correlated 0
                 :foreach learned in=[/interface bridge host find where bridge=$bridgeName] do={
                     :local vid [:tostr [/interface bridge host get $learned vid]]
-                    :if ($vid = $oltVlan) do={
+                    :if ($vid = $scanVlan) do={
                         :local mac [:tostr [/interface bridge host get $learned mac-address]]
                         :local onIf [:tostr [/interface bridge host get $learned on-interface]]
+                        # C0 uses a hexadecimal ZERO, not the letter O.
                         :if (($mac ~ "^C0:FF:EE") || ($mac ~ "^C0:FE:EE")) do={
                             :if ([:typeof [:find ("," . $uplinkPorts . ",") ("," . $onIf . ",")]] != "nil") do={
                                 :set seen ($seen + 1)
                                 :if ($seen > 128) do={
-                                    :error ("ARP:AUTO excessive MAC candidates on VLAN " . $oltVlan)
+                                    :error ("ARP:AUTO too many MAC candidates on VLAN " . $scanVlan)
                                 }
                                 :local pairFound false
                                 :foreach neighbor in=[/ip arp find where mac-address=$mac] do={
@@ -382,24 +414,26 @@
                                     :if ([:len $vlanIf] = 1) do={
                                         :local arpVid [:tostr [/interface vlan get $vlanIf vlan-id]]
                                         :local parent [/interface vlan get $vlanIf interface]
-                                        :if (($arpVid = $oltVlan) && ($parent = $bridgeName) && ([:len $ip] > 0)) do={
+                                        :if (($arpVid = $scanVlan) && ($parent = $bridgeName) && ([:len $ip] > 0)) do={
                                             :set correlated ($correlated + 1)
                                             :set pairFound true
-                                            :put ("ARP REVIEW: VLAN=" . $oltVlan . " IP=" . $ip . " MAC=" . $mac . " interface=" . $arpIf)
+                                            :put ("ARP REVIEW: " . $scanKind . " VLAN=" . $scanVlan . " IP=" . $ip . " MAC=" . $mac . " interface=" . $arpIf)
                                         }
                                     }
                                 }
                                 :if (!$pairFound) do={
-                                    :put ("MAC ONLY: " . $mac . " on " . $onIf . " VLAN=" . $oltVlan . "; no verified IP-ARP mapping")
+                                    :put ("MAC ONLY: " . $mac . " via " . $onIf . " VLAN=" . $scanVlan . " (no validated IP mapping)")
                                 }
                             }
                         }
                     }
                 }
-                :put ("ARP:AUTO RESULT VLAN " . $oltVlan . " MAC candidates=" . $seen . " local IP correlations=" . $correlated)
-                :put "ARP:AUTO will NOT create static ARP from FDB alone. Use verified IP-MAC records on the L3 gateway."
+                :put ("ARP:AUTO RESULT " . $scanKind . " VLAN " . $scanVlan . ": MAC candidates=" . $seen . " local IP correlations=" . $correlated)
             }
+        } else={
+            :put "ARP:AUTO: no PVID/TAG or MGMT VLAN references found"
         }
+        :put "ARP:AUTO is read-only: no static ARP writes without verified L3 IP-MAC mappings."
 
         # Compare bridge membership and explicit PVID.
         :for i from=0 to=($n - 1) do={
