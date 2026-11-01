@@ -535,6 +535,24 @@
                 }
             }
         }
+        # RouterOS Ethernet loop protection complements RSTP.
+        # Cover ALL physical Ethernet interfaces, including MGMT-IF members,
+        # uplinks, downlinks, NAS ports, disabled ports, and unannotated ports.
+        # Only change loop-protect: preserve each interface's existing timers.
+        :local loopChanges 0
+        :foreach etherId in=[/interface ethernet find] do={
+            :local etherName [/interface ethernet get $etherId name]
+            :local state [:tostr [/interface ethernet get $etherId loop-protect]]
+            :if ($state != "on") do={
+                :put ("ENABLE LOOP-PROTECT " . $etherName . " (current=" . $state . ")")
+                :set actions ($actions, "LOOPPROTECT")
+                :set actionIds ($actionIds, $etherName)
+                :set actionValues ($actionValues, "on")
+                :set actionsCount ($actionsCount + 1)
+                :set loopChanges ($loopChanges + 1)
+            }
+        }
+        :put ("LOOP-PROTECT: " . $loopChanges . " physical Ethernet interfaces need enabling")
         :put ("PLANNED CHANGES: " . $actionsCount)
         :if (!$apply) do={ :put "PREVIEW ONLY: NO CHANGES APPLIED"; :return }
         :if ($actionsCount = 0) do={ :put "ALREADY IN SYNC"; :return }
@@ -651,6 +669,13 @@
             }
             :if ($action = "VLANSET") do={
                 /interface bridge vlan set $name tagged=$value
+            }
+            :if ($action = "LOOPPROTECT") do={
+                :local etherId [/interface ethernet find where name=$name]
+                :if ([:len $etherId] != 1) do={
+                    :error ("LOOPPROTECT interface not found uniquely: " . $name)
+                }
+                /interface ethernet set $etherId loop-protect=on
             }
             :if ($action = "SPEEDAUTO") do={
                 /interface ethernet set [find where name=$name] auto-negotiation=yes
