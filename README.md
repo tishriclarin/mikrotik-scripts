@@ -102,3 +102,19 @@ Review the preview before applying. RouterOS loop protection can temporarily dis
     [$ros7UpdateSwitchConfig true]
 
 This is complementary to RSTP, not a replacement. Virtual/bridge interfaces are not modified by the all-Ethernet loop-protection step.
+
+## RSTP port profiles (ros7UpdateSwitchConfig)
+
+The comment-driven bridge updater now reconciles `edge`, `restricted-role`, and `path-cost` for both existing and newly created bridge ports on `MAIN-SWITCH`.
+
+| Port type (comment prefix) | edge | restricted-role | path-cost |
+| --- | --- | --- | --- |
+| `UPLINK` | `no` | `no` | `1` |
+| `NAS-LAN` | `no` | `no` | `10000` |
+| `OLT`, `DOWNLINK`, other unprotected ports | `yes` | `yes` | `20000` |
+
+The VLAN/bridge/RSTP settings of interfaces explicitly listed in `MGMT-IF` are preserved and may differ from these profiles. The all-Ethernet loop-protect setting remains separate.
+
+**Safety:** `edge=yes` is intended for ports without downstream STP-aware bridges, and `restricted-role=yes` can place a port into discarding state when superior BPDUs are received. These configured preferences do not guarantee which port is elected root; verify the bridge monitor and live forwarding topology. Run a preview first and apply only under interactive Safe Mode with an out-of-band recovery path.
+
+Use `load-ros7UpdateSwitchConfig.rsc` to dry-run and import the main script; call `[$ros7UpdateSwitchConfig false]` for preview and `[$ros7UpdateSwitchConfig true]` to apply after confirmation. Runtime hardware behavior has not been tested on the target switch.
