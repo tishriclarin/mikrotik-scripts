@@ -134,3 +134,25 @@ The actual RouterOS Ethernet interface name takes precedence over the `NAME:` co
 Examples: `DOWNLINK1`, `DOWNLINK-AREA2`, and `DOWNLINK_sfp3` are downstream ports with `path-cost=20000`, `edge=no`, `restricted-role=yes`. `OLT-AREA1` has `path-cost=20000`. Management interface-list protections still override automatic bridge-port changes.
 
 The conventions are prefix matches on physical interface names; `NAME:` and `ROLE:` remain fallback means to classify ports not using these reserved physical names. These rules do not guarantee root-port choice independently of spanning-tree BPDUs. Verify via RouterOS preview and bridge monitor before applying remotely.
+
+## Automatic bridge hierarchy: SW:AUTO and SW-VALUE
+
+On a bridge comment, `SW:AUTO` requests an automatic hierarchy proposal using RSTP:
+
+```text
+MAIN-BRIDGE_IGMP_VLAN-FILTERING:YES_SW:AUTO
+```
+
+The script reads the actual bridge RSTP `root-port` and `root-path-cost` twice, two seconds apart, using `/interface bridge monitor ... once do={...}`. It accepts the result only when both readings match, the local bridge is not the root, the bridge monitor reports an enabled state, the root port is a unique physical Ethernet bridge member marked UPLINK (reserved interface-name prefix or `ROLE:UPLINK` / `NAME:UPLINK`), and the local root-port `path-cost` is explicitly `1`. Physical names `NAS-LAN*`, `OLT-*` and `DOWNLINK*` are rejected even if their comment says UPLINK.
+
+The measured root-path-cost must be an integer between 1 and 15. If valid, a value such as 4 produces:
+
+```text
+MAIN-BRIDGE_IGMP_VLAN-FILTERING:YES_SW:AUTO_SW-VALUE:4
+```
+
+The derived desired bridge priority is `4 * 4096 = 16384`. The script **previews** required changes and applies the bridge-comment and priority changes only after the existing safety/confirmation checks; it also checks that the root port has not changed after applying. When the root port is not UPLINK or RSTP values are unstable, missing, or out of range, **no automatic level is calculated**: `SW-VALUE` is left unchanged, priority is left unchanged, and the preview reports the skip reason.
+
+`SW:N` remains the manual mode; `SW-VALUE` is script-managed output only when `SW:AUTO` is set. The reported root-path-cost represents cascade depth **only if every bridge on the path contributes exactly cost 1** and the RSTP root is the intended core. BPDUs carry a root bridge ID, not the core's RouterOS identity; the script does not yet authenticate the intended `CORE-SWITCH` root ID. Do not use `SW:AUTO` for production priority changes until the root ID and RouterOS monitor callback have been validated on your specific hardware.
+
+The full updater remains untested on live RouterOS 7.25 hardware. Run dry-run and preview first.
