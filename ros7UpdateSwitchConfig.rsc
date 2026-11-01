@@ -166,7 +166,8 @@
             :local speed "AUTO"
             :local media ""
             :local arpMode "AUTO"
-            :local oltReference ""
+            :local oltName ""
+            :local tagReference ""
             :local recognized false
             :local isOlt ($comment ~ "^OLT")
             :while ([:len $rest] > 0) do={
@@ -187,7 +188,7 @@
                     :set val [:pick $token ($colon + 1) [:len $token]]
                 } else={
                     # Hyphen separator applies only to known argument keys.
-                    :foreach prefix in={"TAG-";"PVID-";"MGMT-";"VLAN-";"SPEED-";"MEDIA-"} do={
+                    :foreach prefix in={"TAGS-";"TAG-";"PVID-";"MGMT-";"VLAN-";"SPEED-";"MEDIA-";"ARP-"} do={
                         :if ([:pick $token 0 [:len $prefix]] = $prefix) do={
                             :set key [:pick $prefix 0 ([:len $prefix] - 1)]
                             :set val [:pick $token [:len $prefix] [:len $token]]
@@ -197,14 +198,9 @@
                 :if (($key = "OLT") || ($key = "DOWNLINK") || ($key = "UPLINK")) do={
                     :set recognized true
                 }
+                # OLT:AREA1, OLT:51 etc. are labels, never VLAN IDs.
                 :if ($key = "OLT") do={
-                    :if ([:len $val] > 0) do={
-                        :local ref [:tonum $val]
-                        :if (([:typeof $ref] != "num") || ($ref < 1) || ($ref > 4094)) do={
-                            :error ("OLT VLAN reference must be 1..4094 on " . $name)
-                        }
-                        :set oltReference [:tostr $ref]
-                    }
+                    :set oltName $val
                 }
                 :if ($key = "ARP") do={
                     :if ($val != "AUTO") do={
@@ -212,7 +208,18 @@
                     }
                     :set arpMode "AUTO"
                 }
-                :if (($key = "TAG") || ($key = "MGMT") || ($key = "VLAN")) do={
+                # TAG:51 is a single tagged VLAN AND the ARP reference if no PVID.
+                # TAGS:10,11,12 adds other tagged VLANs but is not the ARP reference.
+                :if ($key = "TAG") do={
+                    :local found [$expand $val]
+                    :if ([:len [:toarray $found]] != 1) do={
+                        :error ("TAG must contain exactly one VLAN; use TAGS for lists on " . $name)
+                    }
+                    :set tagReference $found
+                    :set tagged [$append $tagged $found]
+                    :set recognized true
+                }
+                :if (($key = "TAGS") || ($key = "MGMT") || ($key = "VLAN")) do={
                     :if ($val = "AUTO") do={
                         :if ($key != "VLAN") do={ :error ("AUTO invalid for " . $key . " on " . $name) }
                         :set auto "UPLINK"
@@ -294,7 +301,19 @@
                     :set stpCosts ($stpCosts, $cost)
                     :set stpRoles ($stpRoles, $restriction)
                     :set stpEdges ($stpEdges, $edgeSetting)
-                    :set arpVlans ($arpVlans, $oltReference)
+                    :local arpVlan ""
+                    :if ($isOlt) do={
+                        # PVID takes precedence; otherwise use single TAG reference.
+                        :if ([:len $pvid] > 0) do={
+                            :set arpVlan $pvid
+                        } else={
+                            :set arpVlan $tagReference
+                        }
+                        :if ([:len $arpVlan] = 0) do={
+                            :put ("ARP:AUTO SKIP " . $name . " (" . $oltName . "): no PVID or single TAG reference")
+                        }
+                    }
+                    :set arpVlans ($arpVlans, $arpVlan)
                     :foreach id in=[:toarray $tagged] do={ :set universe [$append $universe $id] }
                     :if ([:len $pvid] > 0) do={
                         :set universe [$append $universe $pvid]
@@ -324,7 +343,9 @@
         }
 
 
-        # ARP:AUTO discovery. OLT:<VLAN> identifies the VLAN to inspect.
+        # ARP:AUTO discovery: OLT:AREA1 is a label, not a VLAN.
+        # Reference VLAN = PVID if present, otherwise singular TAG.
+        # TAGS:... and MGMT:... are not ARP reference selectors.
         # Filter for C0:FF:EE and C0:FE:EE (digit zero), learned on UPLINK.
         # Static ARP requires IP+MAC+L3 interface; a bridge FDB alone cannot
         # supply a trustworthy IP. This stage intentionally does NOT write ARP.
@@ -339,7 +360,7 @@
             :local oltVlan [:pick $arpVlans $scanIndex]
             :local srcName [:pick $names $scanIndex]
             :if ([:len $oltVlan] > 0) do={
-                :put ("ARP:AUTO SCAN OLT " . $srcName . " VLAN " . $oltVlan)
+                :put ("ARP:AUTO SCAN OLT " . $srcName . " on PVID/TAG VLAN " . $oltVlan)
                 :local seen 0
                 :local correlated 0
                 :foreach learned in=[/interface bridge host find where bridge=$bridgeName] do={
