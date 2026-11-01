@@ -176,6 +176,11 @@
 
         :local roleOf do={
             :local c [:tostr $1]
+            :local physical [:tostr $2]
+            :if ($physical ~ "^UPLINK") do={ :return "UPLINK" }
+            :if ($physical ~ "^NAS-LAN(_|$)") do={ :return "NAS-LAN" }
+            :if ($physical ~ "^OLT-") do={ :return "OLT" }
+            :if ($physical ~ "^DOWNLINK") do={ :return "DOWNLINK" }
             :foreach role in={"UPLINK";"NAS-LAN";"NAS-WAN";"DOWNLINK";"MGMT";"OLT"} do={
                 :if ($c ~ ("(^|_)ROLE:" . $role . "($|_)")) do={ :return $role }
             }
@@ -195,6 +200,9 @@
         :local stpCostByName do={
             :local p [:tostr $1]
             :local c [:tostr $2]
+            :if ($p ~ "^UPLINK") do={ :return 1 }
+            :if ($p ~ "^NAS-LAN(_|$)") do={ :return 10000 }
+            :if (($p ~ "^OLT-") || ($p ~ "^DOWNLINK")) do={ :return 20000 }
             :if ($c ~ "(^|_)NAME: *") do={
                 :if ($c ~ "(^|_)NAME: *UPLINK") do={ :return 1 }
                 :if ($c ~ "(^|_)NAME: *NAS-LAN($|_)") do={ :return 10000 }
@@ -253,7 +261,7 @@
             :local displayName ""
             :local tagReference ""
             :local recognized false
-            :local role [$roleOf $comment]
+            :local role [$roleOf $comment $name]
             :local isOlt ($role = "OLT")
             :while ([:len $rest] > 0) do={
                 :local cut [:find $rest "_"]
@@ -474,10 +482,10 @@
         :foreach uplinkRow in=[/interface ethernet find] do={
             :local uplinkComment [:tostr [/interface ethernet get $uplinkRow comment]]
             :local physicalName [/interface ethernet get $uplinkRow name]
-            :if ([$roleOf $uplinkComment] = "UPLINK") do={
+            :if ([$roleOf $uplinkComment $physicalName] = "UPLINK") do={
                 :set uplinkPorts [$append $uplinkPorts $physicalName]
             }
-            :if (([$roleOf $uplinkComment] = "OLT") || ([$roleOf $uplinkComment] = "DOWNLINK")) do={
+            :if (([$roleOf $uplinkComment $physicalName] = "OLT") || ([$roleOf $uplinkComment $physicalName] = "DOWNLINK")) do={
                 :set oltFacingPorts [$append $oltFacingPorts $physicalName]
             }
         }
@@ -696,7 +704,7 @@
                     :if ([:len $phy] = 1) do={
                         :local pc [/interface ethernet get $phy comment]
                         :set desiredCost [$stpCostByName $pname $pc]
-                        :local r [$roleOf $pc]
+                        :local r [$roleOf $pc $pname]
                         :if ($r = "UPLINK") do={
                             :set desiredRole "no"
                             :set desiredEdge "no"
@@ -840,7 +848,7 @@
             :local pname [/interface ethernet get $phys name]
             :local pc [:tostr [/interface ethernet get $phys comment]]
             :local isProtected ([:typeof [:find ("," . $mgmtMembers . ",") ("," . $pname . ",")]] != "nil")
-            :if (($pc ~ "^MGMT") || ($pc ~ "^Management") || ([$roleOf $pc] = "MGMT") || ($pname ~ "^MGMT") || ($pname ~ "^Management")) do={
+            :if (($pc ~ "^MGMT") || ($pc ~ "^Management") || ([$roleOf $pc $pname] = "MGMT") || ($pname ~ "^MGMT") || ($pname ~ "^Management")) do={
                 :set isProtected true
             }
             :local known false
@@ -1062,7 +1070,7 @@
                 :if ([:len $ethId] = 1) do={
                     :local c [/interface ethernet get $ethId comment]
                     :set cost [$stpCostByName $name $c]
-                    :local r [$roleOf $c]
+                    :local r [$roleOf $c $name]
                     :if ($r = "UPLINK") do={
                         :set restrictedBoolean false
                         :set edgeSetting "no"
