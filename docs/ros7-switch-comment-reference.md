@@ -156,3 +156,11 @@ The derived desired bridge priority is `4 * 4096 = 16384`. The script **previews
 `SW:N` remains the manual mode; `SW-VALUE` is script-managed output only when `SW:AUTO` is set. The reported root-path-cost represents cascade depth **only if every bridge on the path contributes exactly cost 1** and the RSTP root is the intended core. BPDUs carry a root bridge ID, not the core's RouterOS identity; the script does not yet authenticate the intended `CORE-SWITCH` root ID. Do not use `SW:AUTO` for production priority changes until the root ID and RouterOS monitor callback have been validated on your specific hardware.
 
 The full updater remains untested on live RouterOS 7.25 hardware. Run dry-run and preview first.
+
+## Pending SW:AUTO: CHECK-SW marker
+
+When `SW:AUTO` cannot validate a stable RSTP UPLINK root port (including UPLINK being down), the current updater **plans** adding `_CHECK-SW` to the bridge comment. A valid later run proposes `SW-VALUE:N` and removes `_CHECK-SW` in that same change, after confirmation and the existing management safeguards. While pending, it does not replace the existing SW-VALUE or change the bridge priority.
+
+**Trigger status:** an automatic periodic scheduler or link-up event trigger has **not yet been installed**. The flag alone is passive; currently the user must rerun the updater preview and apply. A future one-minute watchdog may check `CHECK-SW` and re-evaluate the RSTP root without running the entire configuration updater automatically. This avoids unintended VLAN changes and unapproved live RSTP priority changes.
+
+In manual mode, bridge priority is `SW:N * 4096`; e.g. `SW:1` = `4096`. The actual root bridge priority is selected by RSTP, not guaranteed solely by this arithmetic.
