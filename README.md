@@ -128,3 +128,18 @@ Current `ros7UpdateSwitchConfig` RSTP policy: `UPLINK` has `edge=no restricted-r
 **AUTO VLAN caveat:** The existing `NAS-LAN:AUTO` rule still adds **every discovered VLAN**, including any WAN VLAN; `UPLINK_VLAN:AUTO` still adds tagged/MGMT VLANs while excluding OLT PVIDs. These behaviors were explicitly defined earlier and are **not yet adjusted to enforce strict WAN/subscriber VLAN separation**. Use an explicit numeric `NAS-LAN:...` VLAN list for production isolation until AUTO rules are narrowed. A descriptive `NAS-WAN:LABEL` alone does not identify VLAN IDs.
 
 Spanning tree root selection depends on BPDUs received from a valid upstream switch; configured port costs do not guarantee a root port in an arbitrary topology. Always preview and verify the RSTP bridge monitor and VLAN forwarding before committing.
+
+## OLT comment grammar: label vs VLAN, ARP reference, and TAGS
+
+The `ros7UpdateSwitchConfig.rsc` parser treats `OLT:<name>` as an **identifier only**; values such as `OLT:51` and `OLT:AREA1` do not select VLAN 51 automatically.
+
+For `ARP:AUTO`, the VLAN reference is chosen from **PVID** (if present), otherwise from a **single TAG**:
+
+- `OLT:AREA1_PVID:51_MGMT:101_TAGS:10,11,12_SPEED:10G_ARP:AUTO` — VLAN 51 untagged (PVID/ARP reference), VLANs 101,10,11,12 tagged.
+- `OLT:AREA1_TAG:51_MGMT:101_TAGS:10,11,12_SPEED:10G_ARP:AUTO` — VLAN 51 tagged and used as the ARP reference; VLANs 101,10,11,12 also tagged.
+
+`TAG:<vlan>` requires **exactly one VLAN**. Use `TAGS:10,11,12` (or supported ranges) for additional tagged VLANs. When both PVID and TAG are present, PVID takes precedence for ARP reference. The script rejects a port being both tagged and untagged on the same VLAN.
+
+`ARP:AUTO` currently **only discovers and displays** candidate `C0:FF:EE` / `C0:FE:EE` MACs learned on UPLINK in the chosen VLAN and checks for an already observed IP-to-MAC mapping on a corresponding VLAN interface. It does not create static ARP entries, because a bridge-learned MAC does not prove an IP-to-MAC association. Static ARP must be applied on the appropriate Layer 3 gateway after verifying the mapping.
+
+Always use the `load-ros7UpdateSwitchConfig.rsc` dry-run loader and preview first; hardware and execution behavior remain untested on production switches.
