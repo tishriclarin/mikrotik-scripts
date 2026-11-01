@@ -291,6 +291,7 @@
     :local stpRoles [:toarray ""]
     :local stpEdges [:toarray ""]
     :local arpVlans [:toarray ""]
+    :local portLabels [:toarray ""]
     :local universe ""
     :local oltPvids ""
     :local mgmtArpVlans ""
@@ -310,6 +311,7 @@
         :local media ""
         :local arpMode "AUTO"
         :local displayName ""
+        :local portLabel ""
         :local tagReference ""
         :local recognized false
         :local role [$roleOf $comment $name]
@@ -341,7 +343,14 @@
             :if (($key = "NAME") || ($key = "ROLE") || ($key = "OLT") || ($key = "DOWNLINK") || ($key = "UPLINK")) do={
                 :set recognized true
             }
-            :if ($key = "NAME") do={ :set displayName $val }
+            :if ($key = "NAME") do={
+                :local label $val
+                :while (([:len $label] > 0) && ([:pick $label 0 1] = " ")) do={ :set label [:pick $label 1 [:len $label]] }
+                :while (([:len $label] > 0) && ([:pick $label ([:len $label] - 1) [:len $label]] = " ")) do={ :set label [:pick $label 0 ([:len $label] - 1)] }
+                :if ([:len $label] = 0) do={ :error ("Empty NAME on " . $name) }
+                :set displayName $label
+                :set portLabel $label
+            }
             :if ($key = "OLT") do={
                 :set displayName $val
                 :put ("LEGACY COMMENT " . $name . ": use NAME:" . $val . " instead of OLT:" . $val)
@@ -456,6 +465,7 @@
                     :put ("ACCESS VLAN-UNTAGGED-ONLY: " . $name . " PVID=" . $pvid)
                 }
                 :set names ($names, $name)
+                :set portLabels ($portLabels, $portLabel)
                 :set pvids ($pvids, $pvid)
                 :set tags ($tags, $tagged)
                 :set autos ($autos, $auto)
@@ -496,7 +506,7 @@
     }
 
     :local n [:len $names]
-    :if (([:len $pvids] != $n) || ([:len $tags] != $n) || ([:len $autos] != $n) || ([:len $speeds] != $n) || ([:len $mediaTypes] != $n) || ([:len $stpCosts] != $n) || ([:len $stpRoles] != $n) || ([:len $stpEdges] != $n) || ([:len $arpVlans] != $n)) do={
+    :if (([:len $pvids] != $n) || ([:len $tags] != $n) || ([:len $autos] != $n) || ([:len $speeds] != $n) || ([:len $mediaTypes] != $n) || ([:len $stpCosts] != $n) || ([:len $stpRoles] != $n) || ([:len $stpEdges] != $n) || ([:len $arpVlans] != $n) || ([:len $portLabels] != $n)) do={
         :error "ABORT: Internal port metadata array length mismatch"
     }
     :if ($n = 0) do={ :error "No recognized interface comments on this switch" }
@@ -741,6 +751,22 @@
         }
     }
 
+    :for j from=0 to=($n - 1) do={
+        :local label [:pick $portLabels $j]
+        :if ([:len $label] > 0) do={
+            :local ethName [:pick $names $j]
+            :local bp [/interface bridge port find where bridge=$bridgeName and interface=$ethName]
+            :local old ""
+            :if ([:len $bp] = 1) do={ :set old [/interface bridge port get $bp comment] }
+            :if (([:len $bp] = 0) || ($old != $label)) do={
+                :put ("BRIDGE PORT COMMENT: " . $ethName . " [" . $old . "] -> [" . $label . "]")
+                :set actions ($actions, "BPCOMMENT")
+                :set actionIds ($actionIds, $ethName)
+                :set actionValues ($actionValues, $label)
+                :set actionsCount ($actionsCount + 1)
+            }
+        }
+    }
     :foreach bp in=[/interface bridge port find where bridge=$bridgeName] do={
         :local pname [/interface bridge port get $bp interface]
         :local isMgmt ([:typeof [:find ("," . $mgmtMembers . ",") ("," . $pname . ",")]] != "nil")
@@ -1114,6 +1140,11 @@
         :local action [:pick $actions $i]
         :local name [:pick $actionIds $i]
         :local value [:pick $actionValues $i]
+        :if ($action = "BPCOMMENT") do={
+            :local bp [/interface bridge port find where bridge=$bridgeName and interface=$name]
+            :if ([:len $bp] != 1) do={ :error ("Bridge port missing for NAME: " . $name) }
+            /interface bridge port set $bp comment=$value
+        }
         :if ($action = "IGMP") do={
             /interface bridge set $bridgeId igmp-snooping=($value = "true")
         }
@@ -1257,7 +1288,6 @@
     :put "CONFIG UPDATE COMPLETE. Verify VLANs, root port, and link status before Safe Mode commit."
     :if ($swAuto) do={ :put ("SW:AUTO valid=" . $swReady . " level=" . $hopLevel) }
     :put ("Bridge RSTP root-port and root-path-cost check:")
-    :put "UPLINK alone is root-port eligible. NAS-LAN is a protected subscriber gateway-facing port, not an STP backup."
     :put "RSTP path cost cannot guarantee root-port choice against arbitrary advertised upstream costs."
     /interface bridge monitor $bridgeName once
     }
