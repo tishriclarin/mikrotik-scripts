@@ -66,3 +66,25 @@ It selects Ethernet interfaces whose comments begin with `OLT-` and sets each ma
 5. If everything works, return to the original `<SAFE>` terminal and press **Ctrl+X** to commit. If not, press **Ctrl+D** in that terminal to abandon changes. If disconnected unexpectedly, Safe Mode normally rolls the changes back after the connection times out.
 
 **Limitations:** A successful gateway ping is not proof that your management session, OLT service, or RSTP topology remains functional. Do not use this as a zero-risk remote change. Have out-of-band access for critical switches. Supported hardware must expose the `/interface ethernet switch port-isolation` `forwarding-override` feature; some MikroTik switch families use different isolation mechanisms. This script is not automatically scheduled.
+
+## Current global isolation script: ros7SwitchIsolateOLT
+
+For the current global function, use the **validated bootstrap installer** rather than importing the main script directly.
+
+Place these two files in MikroTik Files, together with their .sha512 companion files:
+- ros7SwitchIsolateOLT.rsc
+- install-ros7SwitchIsolateOLT.rsc
+
+First verify the downloaded SHA-512 checksums. Then run:
+
+    /import file-name=install-ros7SwitchIsolateOLT.rsc
+    :global ros7SwitchIsolateOLT
+    [$ros7SwitchIsolateOLT false]
+
+The bootstrap requires RouterOS 7.16+ and uses the documented import verbose dry-run mode to check the main .rsc file BEFORE importing it. Actual import registers the global function and performs a read-only preview self-test. Dry-run does not prove hardware support or runtime success.
+
+For a remote apply, use an interactive Safe Mode session (Ctrl+X) and verify a second management connection before committing. After reviewing the preview:
+
+    [$ros7SwitchIsolateOLT true]
+
+The current main script does NOT yet include the proposed concurrent-run cancellation, 30-second confirmation timeout, or two-generation backup rotation. Do not assume those protections are present.
