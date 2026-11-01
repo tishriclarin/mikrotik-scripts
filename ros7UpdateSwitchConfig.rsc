@@ -356,10 +356,15 @@
         # Static ARP requires IP+MAC+L3 interface; a bridge FDB alone cannot
         # supply a trustworthy IP. This stage intentionally does NOT write ARP.
         :local uplinkPorts ""
+        :local oltFacingPorts ""
         :foreach uplinkRow in=[/interface ethernet find] do={
             :local uplinkComment [:tostr [/interface ethernet get $uplinkRow comment]]
+            :local physicalName [/interface ethernet get $uplinkRow name]
             :if ($uplinkComment ~ "^UPLINK") do={
-                :set uplinkPorts [$append $uplinkPorts [/interface ethernet get $uplinkRow name]]
+                :set uplinkPorts [$append $uplinkPorts $physicalName]
+            }
+            :if (($uplinkComment ~ "^OLT") || ($uplinkComment ~ "^DOWNLINK")) do={
+                :set oltFacingPorts [$append $oltFacingPorts $physicalName]
             }
         }
         # Include both OLT PVID/TAG references and MGMT VLANs.
@@ -401,7 +406,14 @@
                         :local onIf [:tostr [/interface bridge host get $learned on-interface]]
                         # C0 uses a hexadecimal ZERO, not the letter O.
                         :if (($mac ~ "^C0:FF:EE") || ($mac ~ "^C0:FE:EE")) do={
-                            :if ([:typeof [:find ("," . $uplinkPorts . ",") ("," . $onIf . ",")]] != "nil") do={
+                            :local allowedSource ([:typeof [:find ("," . $uplinkPorts . ",") ("," . $onIf . ",")]] != "nil")
+                            :local isMgmtScan ([:typeof [:find ("," . $mgmtArpVlans . ",") ("," . $scanVlan . ",")]] != "nil")
+                            :if ($isMgmtScan) do={
+                                :if ([:typeof [:find ("," . $oltFacingPorts . ",") ("," . $onIf . ",")]] != "nil") do={
+                                    :set allowedSource true
+                                }
+                            }
+                            :if ($allowedSource) do={
                                 :set seen ($seen + 1)
                                 :if ($seen > 128) do={
                                     :error ("ARP:AUTO too many MAC candidates on VLAN " . $scanVlan)
