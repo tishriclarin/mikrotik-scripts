@@ -195,3 +195,7 @@ The current switch updater accepts bridge comment `VLAN-FILTERING:YES` or `VLAN-
 ## SW:AUTO bridge hierarchy (current)
 
 Bridge comments may use `MAIN-BRIDGE_IGMP_VLAN-FILTERING:YES_SW:AUTO`. The updater proposes a generated `_SW-VALUE:N` and bridge priority `N*4096` **only if two RSTP monitor readings agree and the root port is an eligible UPLINK bridge port with path-cost 1**. When a different port is root, or root-path-cost is invalid, it skips both changes without overwriting a previous `SW-VALUE`. Physical reserved NAS-LAN/OLT/DOWNLINK port names cannot be treated as UPLINK by a misleading comment. Refer to [the current comment reference](docs/ros7-switch-comment-reference.md). A root-path-cost of N equals N cascaded switches only if all links toward the root contribute cost 1. Hardware testing, root bridge-ID authorization, and a production rollback audit are pending.
+
+## Authoritative final comment arguments
+
+The consolidated bridge/interface comment grammar, defaults, reserved physical-port prefixes, and generated `SW-VALUE` / `CHECK-SW` fields are in [Final Switch Comment Arguments](docs/ros7-switch-comments-final.md). This document supersedes scattered legacy examples earlier in this README. Management-VLAN migration and automatic CHECK-SW retry remain separately pending.
