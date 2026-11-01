@@ -323,6 +323,63 @@
             :set actionsCount ($actionsCount + 1)
         }
 
+
+        # ARP:AUTO discovery. OLT:<VLAN> identifies the VLAN to inspect.
+        # Filter for C0:FF:EE and C0:FE:EE (digit zero), learned on UPLINK.
+        # Static ARP requires IP+MAC+L3 interface; a bridge FDB alone cannot
+        # supply a trustworthy IP. This stage intentionally does NOT write ARP.
+        :local uplinkPorts ""
+        :foreach uplinkRow in=[/interface ethernet find] do={
+            :local uplinkComment [:tostr [/interface ethernet get $uplinkRow comment]]
+            :if ($uplinkComment ~ "^UPLINK") do={
+                :set uplinkPorts [$append $uplinkPorts [/interface ethernet get $uplinkRow name]]
+            }
+        }
+        :for scanIndex from=0 to=($n - 1) do={
+            :local oltVlan [:pick $arpVlans $scanIndex]
+            :local srcName [:pick $names $scanIndex]
+            :if ([:len $oltVlan] > 0) do={
+                :put ("ARP:AUTO SCAN OLT " . $srcName . " VLAN " . $oltVlan)
+                :local seen 0
+                :local correlated 0
+                :foreach learned in=[/interface bridge host find where bridge=$bridgeName] do={
+                    :local vid [:tostr [/interface bridge host get $learned vid]]
+                    :if ($vid = $oltVlan) do={
+                        :local mac [:tostr [/interface bridge host get $learned mac-address]]
+                        :local onIf [:tostr [/interface bridge host get $learned on-interface]]
+                        :if (($mac ~ "^C0:FF:EE") || ($mac ~ "^C0:FE:EE")) do={
+                            :if ([:typeof [:find ("," . $uplinkPorts . ",") ("," . $onIf . ",")]] != "nil") do={
+                                :set seen ($seen + 1)
+                                :if ($seen > 128) do={
+                                    :error ("ARP:AUTO excessive MAC candidates on VLAN " . $oltVlan)
+                                }
+                                :local pairFound false
+                                :foreach neighbor in=[/ip arp find where mac-address=$mac] do={
+                                    :local ip [:tostr [/ip arp get $neighbor address]]
+                                    :local arpIf [:tostr [/ip arp get $neighbor interface]]
+                                    :local vlanIf [/interface vlan find where name=$arpIf]
+                                    :if ([:len $vlanIf] = 1) do={
+                                        :local arpVid [:tostr [/interface vlan get $vlanIf vlan-id]]
+                                        :local parent [/interface vlan get $vlanIf interface]
+                                        :if (($arpVid = $oltVlan) && ($parent = $bridgeName) && ([:len $ip] > 0)) do={
+                                            :set correlated ($correlated + 1)
+                                            :set pairFound true
+                                            :put ("ARP REVIEW: VLAN=" . $oltVlan . " IP=" . $ip . " MAC=" . $mac . " interface=" . $arpIf)
+                                        }
+                                    }
+                                }
+                                :if (!$pairFound) do={
+                                    :put ("MAC ONLY: " . $mac . " on " . $onIf . " VLAN=" . $oltVlan . "; no verified IP-ARP mapping")
+                                }
+                            }
+                        }
+                    }
+                }
+                :put ("ARP:AUTO RESULT VLAN " . $oltVlan . " MAC candidates=" . $seen . " local IP correlations=" . $correlated)
+                :put "ARP:AUTO will NOT create static ARP from FDB alone. Use verified IP-MAC records on the L3 gateway."
+            }
+        }
+
         # Compare bridge membership and explicit PVID.
         :for i from=0 to=($n - 1) do={
             :local name [:pick $names $i]
