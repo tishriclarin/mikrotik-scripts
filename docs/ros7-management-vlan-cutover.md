@@ -6,7 +6,29 @@ Status: **design / not yet an executable production migration**. The current `ro
 
 `BRIGE-MAIN_SW:1_MGMT:101_IP:192.168.101.10/24_MGMT-PORTS:UPLINK,DETECT`
 
-`BRIGE-MAIN` is accepted as supplied alongside corrected `BRIDGE-MAIN` or `MAIN-BRIDGE`. `DETECT` requests physical Etherboot port discovery only when the routerboard actually exposes the setting. Do not substitute ether1 silently: RouterBOOT etherboot-port is model-dependent.
+`BRIGE-MAIN` is accepted as supplied alongside corrected `BRIDGE-MAIN` or `MAIN-BRIDGE`. `DETECT` requests the management/Etherboot physical port. RouterBOOT `etherboot-port` is model-dependent and not available on all devices.
+
+## Management/Etherboot port discovery: explicit, RouterBOOT, copper fallback
+
+Apply the following ordered rules to identify the *designated management access port* (not proof of the current session's ingress):
+
+1. **Known, unambiguous management port:** use a previously confirmed physical port from the switch model, explicit deployment configuration, or a uniquely matching physical interface from management interface lists (`MGMT-IF`, `MGMT`, `MANAGEMENT`). If a list contains multiple physical ports, it is not a unique management-port answer; continue with reliable device-specific evidence.
+2. **RouterBOOT Etherboot port:** use `/system routerboard settings get etherboot-port` if the property is exposed and names an existing physical Ethernet interface. RouterBOOT exposes this setting only on certain models.
+3. **One RJ45 copper Ethernet interface:** if no reliable identification above succeeds, enumerate actual Ethernet interfaces with **factory `default-name` matching `^ether[0-9]+# RouterOS 7 management VLAN cutover: reconnect and recovery contract
+
+Status: **design / not yet an executable production migration**. The current `ros7UpdateSwitchConfig.rsc` has not been modified by this document. Do not claim automatic five-minute rollback or automatic logout until a tested companion script exists.
+
+## Input
+
+`BRIGE-MAIN_SW:1_MGMT:101_IP:192.168.101.10/24_MGMT-PORTS:UPLINK,DETECT`
+
+**. If exactly one exists, select it as `DETECT`.
+4. **Multiple RJ45 copper Ethernet interfaces:** select the **last physical copper port**, defined deterministically as the greatest numeric suffix of the factory `default-name` (e.g., `ether10` after `ether9`; do not compare names lexicographically).
+5. **No reliable copper candidates:** fail closed. Never guess an SFP/QSFP interface. Combo ports and renamed or unusual copper interfaces can defeat the `etherN` heuristic and require model-specific verification.
+
+Display a detection result such as `DETECT: ether8 [method=highest-numbered-copper, confidence=heuristic]` in preview, with the complete candidate list. **The heuristic must not authorize deleting the existing bridge IP, terminating the current user session, or modifying the selected management port without a separate management-VLAN reconnection proof and working five-minute rollback watchdog.** The physical access-port designation is not equivalent to identifying the *actual session ingress port*. Require explicit human confirmation when using the multi-copper fallback.
+
+For an automatic cutover, do not silently set `UPLINK` or the selected `DETECT` port's PVID from the fallback until the migration transaction and watchdog have captured the exact original values and supplied a reliable recovery path.
 
 ## Initial state and staged configuration
 
