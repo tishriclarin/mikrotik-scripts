@@ -182,12 +182,27 @@
             :foreach role in={"UPLINK";"NAS-LAN";"NAS-WAN";"DOWNLINK";"MGMT";"OLT"} do={
                 :if ($c ~ ("(^|_)NAME: *" . $role . "($|_)")) do={ :return $role }
             }
-            :if ($c ~ "^UPLINK($|_)") do={ :return "UPLINK" }
+            :if ($c ~ "(^|_)NAME: *UPLINK") do={ :return "UPLINK" }
+            :if ($c ~ "(^|_)NAME: *OLT-") do={ :return "OLT" }
+            :if ($c ~ "^UPLINK") do={ :return "UPLINK" }
             :if ($c ~ "^DOWNLINK") do={ :return "DOWNLINK" }
             :if ($c ~ "^OLT:") do={ :return "OLT" }
             :if ($c ~ "(^|_)NAS-LAN:") do={ :return "NAS-LAN" }
             :if (($c ~ "(^|_)NAME:") && (($c ~ "(^|_)PVID:") || ($c ~ "(^|_)TAG:"))) do={ :return "OLT" }
             :return "OTHER"
+        }
+
+        :local stpCostByName do={
+            :local p [:tostr $1]
+            :local c [:tostr $2]
+            :if ($c ~ "(^|_)NAME: *") do={
+                :if ($c ~ "(^|_)NAME: *UPLINK") do={ :return 1 }
+                :if ($c ~ "(^|_)NAME: *NAS-LAN($|_)") do={ :return 10000 }
+                :return 20000
+            }
+            :if ($p ~ "^UPLINK") do={ :return 1 }
+            :if ($p ~ "^NAS-LAN(_|$)") do={ :return 10000 }
+            :return 20000
         }
 
         :local mgmtMembers ""
@@ -387,20 +402,14 @@
                     :set autos ($autos, $auto)
                     :set speeds ($speeds, $speed)
                     :set mediaTypes ($mediaTypes, $media)
-                    :local cost 20000
+                    :local cost [$stpCostByName $name $comment]
                     :local restriction "yes"
                     :local edgeSetting "yes-discover"
                     :if ($role = "UPLINK") do={
-                        :set cost 1
                         :set restriction "no"
                         :set edgeSetting "no"
                     }
-                    :if ($role = "NAS-LAN") do={
-                        :set cost 10000
-                        :set restriction "yes"
-                        :set edgeSetting "no"
-                    }
-                    :if ($role = "DOWNLINK") do={
+                    :if (($role = "NAS-LAN") || ($role = "DOWNLINK")) do={
                         :set edgeSetting "no"
                     }
                     :set stpCosts ($stpCosts, $cost)
@@ -686,17 +695,13 @@
                     :local phy [/interface ethernet find where name=$pname]
                     :if ([:len $phy] = 1) do={
                         :local pc [/interface ethernet get $phy comment]
-                        :if ([$roleOf $pc] = "UPLINK") do={
-                            :set desiredCost 1
+                        :set desiredCost [$stpCostByName $pname $pc]
+                        :local r [$roleOf $pc]
+                        :if ($r = "UPLINK") do={
                             :set desiredRole "no"
                             :set desiredEdge "no"
                         }
-                        :if ([$roleOf $pc] = "NAS-LAN") do={
-                            :set desiredCost 10000
-                            :set desiredRole "yes"
-                            :set desiredEdge "no"
-                        }
-                        :if ([$roleOf $pc] = "DOWNLINK") do={
+                        :if (($r = "NAS-LAN") || ($r = "DOWNLINK")) do={
                             :set desiredEdge "no"
                         }
                     }
@@ -1056,17 +1061,13 @@
                 :local ethId [/interface ethernet find where name=$name]
                 :if ([:len $ethId] = 1) do={
                     :local c [/interface ethernet get $ethId comment]
-                    :if ([$roleOf $c] = "UPLINK") do={
-                        :set cost 1
+                    :set cost [$stpCostByName $name $c]
+                    :local r [$roleOf $c]
+                    :if ($r = "UPLINK") do={
                         :set restrictedBoolean false
                         :set edgeSetting "no"
                     }
-                    :if ([$roleOf $c] = "NAS-LAN") do={
-                        :set cost 10000
-                        :set restrictedBoolean true
-                        :set edgeSetting "no"
-                    }
-                    :if ($c ~ "^DOWNLINK") do={
+                    :if (($r = "NAS-LAN") || ($r = "DOWNLINK")) do={
                         :set edgeSetting "no"
                     }
                 }
