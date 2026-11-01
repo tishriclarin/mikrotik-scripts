@@ -121,6 +121,7 @@
         :put "CAUTION: NAS-LAN:AUTO currently includes every discovered VLAN, including possible WAN VLANs."
         :put "Use NAS-LAN:<explicit VLAN list> for WAN/subscriber separation."
         :put ("BRIDGE: " . $bridgeName . " vlan-filtering=" . $filtering)
+        :put "EXPECTED: vlan-filtering=yes. This script will NOT toggle it remotely."
         :if (!$filtering) do={
             :put "WARNING: vlan-filtering=no; configuration will be staged but not effective."
             :put "This script will NOT enable vlan-filtering."
@@ -150,6 +151,7 @@
         :local stpCosts [:toarray ""]
         :local stpRoles [:toarray ""]
         :local stpEdges [:toarray ""]
+        :local arpVlans [:toarray ""]
         :local universe ""
         :local oltPvids ""
         :local accessPorts ""
@@ -161,8 +163,10 @@
             :local pvid ""
             :local tagged ""
             :local auto ""
-            :local speed ""
+            :local speed "AUTO"
             :local media ""
+            :local arpMode "AUTO"
+            :local oltReference ""
             :local recognized false
             :local isOlt ($comment ~ "^OLT")
             :while ([:len $rest] > 0) do={
@@ -192,6 +196,21 @@
                 }
                 :if (($key = "OLT") || ($key = "DOWNLINK") || ($key = "UPLINK")) do={
                     :set recognized true
+                }
+                :if ($key = "OLT") do={
+                    :if ([:len $val] > 0) do={
+                        :local ref [:tonum $val]
+                        :if (([:typeof $ref] != "num") || ($ref < 1) || ($ref > 4094)) do={
+                            :error ("OLT VLAN reference must be 1..4094 on " . $name)
+                        }
+                        :set oltReference [:tostr $ref]
+                    }
+                }
+                :if ($key = "ARP") do={
+                    :if ($val != "AUTO") do={
+                        :error ("Unsupported ARP mode on " . $name . ": " . $val)
+                    }
+                    :set arpMode "AUTO"
                 }
                 :if (($key = "TAG") || ($key = "MGMT") || ($key = "VLAN")) do={
                     :if ($val = "AUTO") do={
@@ -235,6 +254,9 @@
                 }
                 # NAS-WAN:ISULAN-NAS is a descriptive marker, never a VLAN number.
             }
+            :if (($comment ~ "^OLT_RESERVED") || ($comment ~ "^OTHER")) do={
+                :set recognized false
+            }
             :if ($recognized) do={
                 :if ([:typeof [:find ("," . $mgmtMembers . ",") ("," . $name . ",")]] != "nil") do={
                     :put ("PROTECTED MGMT-IF, no change: " . $name)
@@ -272,6 +294,7 @@
                     :set stpCosts ($stpCosts, $cost)
                     :set stpRoles ($stpRoles, $restriction)
                     :set stpEdges ($stpEdges, $edgeSetting)
+                    :set arpVlans ($arpVlans, $oltReference)
                     :foreach id in=[:toarray $tagged] do={ :set universe [$append $universe $id] }
                     :if ([:len $pvid] > 0) do={
                         :set universe [$append $universe $pvid]
@@ -283,7 +306,7 @@
 
         # Validate parallel arrays before referencing them by index.
         :local n [:len $names]
-        :if (([:len $pvids] != $n) || ([:len $tags] != $n) || ([:len $autos] != $n) || ([:len $speeds] != $n) || ([:len $mediaTypes] != $n) || ([:len $stpCosts] != $n) || ([:len $stpRoles] != $n) || ([:len $stpEdges] != $n)) do={
+        :if (([:len $pvids] != $n) || ([:len $tags] != $n) || ([:len $autos] != $n) || ([:len $speeds] != $n) || ([:len $mediaTypes] != $n) || ([:len $stpCosts] != $n) || ([:len $stpRoles] != $n) || ([:len $stpEdges] != $n) || ([:len $arpVlans] != $n)) do={
             :error "ABORT: Internal port metadata array length mismatch"
         }
         :if ($n = 0) do={ :error "No recognized interface comments on this switch" }
@@ -558,6 +581,38 @@
                 }
             }
         }
+        # Disable explicitly reserved/OTHER ports by default.
+        # Unclassified ports are disabled only when link-down, unbridged and unaddressed.
+        # Protect MGMT-IF membership and interface names beginning MGMT/Management.
+        :foreach phys in=[/interface ethernet find] do={
+            :local pname [/interface ethernet get $phys name]
+            :local pc [:tostr [/interface ethernet get $phys comment]]
+            :local isProtected ([:typeof [:find ("," . $mgmtMembers . ",") ("," . $pname . ",")]] != "nil")
+            :if (($pc ~ "^MGMT") || ($pc ~ "^Management") || ($pname ~ "^MGMT") || ($pname ~ "^Management")) do={
+                :set isProtected true
+            }
+            :local known false
+            :foreach managedName in=$names do={
+                :if ($managedName = $pname) do={ :set known true }
+            }
+            :local explicitDisable (($pc ~ "^OLT_RESERVED") || ($pc ~ "^OTHER"))
+            :local hasBridge ([:len [/interface bridge port find where interface=$pname]] > 0)
+            :local hasIP ([:len [/ip address find where interface=$pname and disabled=no]] > 0)
+            :local isRunning [/interface ethernet get $phys running]
+            :if (!$known && !$isProtected) do={
+                :if (!$explicitDisable && ($hasBridge || $hasIP || $isRunning)) do={
+                    :put ("SKIP UNCLASSIFIED ACTIVE/CONFIGURED: " . $pname)
+                } else={
+                    :if (![/interface ethernet get $phys disabled]) do={
+                        :put ("DISABLE UNUSED: " . $pname)
+                        :set actions ($actions, "DISABLE")
+                        :set actionIds ($actionIds, $pname)
+                        :set actionValues ($actionValues, "yes")
+                        :set actionsCount ($actionsCount + 1)
+                    }
+                }
+            }
+        }
         # RouterOS Ethernet loop protection complements RSTP.
         # Cover ALL physical Ethernet interfaces, including MGMT-IF members,
         # uplinks, downlinks, NAS ports, disabled ports, and unannotated ports.
@@ -577,6 +632,9 @@
         }
         :put ("LOOP-PROTECT: " . $loopChanges . " physical Ethernet interfaces need enabling")
         :put ("PLANNED CHANGES: " . $actionsCount)
+        :if ($apply && !$filtering) do={
+            :error "ABORT: MAIN-SWITCH vlan-filtering=no. Enable separately after verifying management VLAN access."
+        }
         :if (!$apply) do={ :put "PREVIEW ONLY: NO CHANGES APPLIED"; :return }
         :if ($actionsCount = 0) do={ :put "ALREADY IN SYNC"; :return }
         :put "WARNING: This can interrupt switching. Use interactive Safe Mode Ctrl+X."
@@ -686,6 +744,11 @@
             }
             :if ($action = "VLANSET") do={
                 /interface bridge vlan set $name tagged=$value
+            }
+            :if ($action = "DISABLE") do={
+                :local disableId [/interface ethernet find where name=$name]
+                :if ([:len $disableId] != 1) do={ :error ("Disable target missing: " . $name) }
+                /interface ethernet set $disableId disabled=yes
             }
             :if ($action = "LOOPPROTECT") do={
                 :local etherId [/interface ethernet find where name=$name]
