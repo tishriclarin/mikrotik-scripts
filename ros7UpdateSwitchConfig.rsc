@@ -98,29 +98,59 @@
             :set bridgeId [:pick $allBridges 0]
             :put "MAIN-SWITCH auto-detected: only one bridge exists."
         } else={
-            :local matches [/interface bridge find where comment="MAIN-SWITCH"]
+            :local matches [:toarray ""]
+            :foreach bridgeItem in=$allBridges do={
+                :local bc [:tostr [/interface bridge get $bridgeItem comment]]
+                :if (($bc = "MAIN-SWITCH") || ($bc ~ "^MAIN-BRIDGE")) do={
+                    :set matches ($matches, $bridgeItem)
+                }
+            }
             :if ([:len $matches] != 1) do={
-                :error ("ABORT: " . $bridgeTotal . " bridges exist; exactly one must have comment MAIN-SWITCH")
+                :error ("ABORT: " . $bridgeTotal . " bridges exist; uniquely mark MAIN-BRIDGE or MAIN-SWITCH")
             }
             :set bridgeId [:pick $matches 0]
             :put "MAIN-SWITCH selected using bridge comment."
         }
         :local bridgeName [/interface bridge get $bridgeId name]
+        :local bridgeComment [:tostr [/interface bridge get $bridgeId comment]]
         :local filtering [/interface bridge get $bridgeId vlan-filtering]
+        :local wantIgmp true
+        :if ($bridgeComment ~ "(^|_)IGMP:NO($|_)") do={
+            :set wantIgmp false
+        }
+        :local igmpNow [/interface bridge get $bridgeId igmp-snooping]
+        :put ("BRIDGE: " . $bridgeName . " comment=" . $bridgeComment)
         :local protocol [/interface bridge get $bridgeId protocol-mode]
         :if ($protocol != "rstp") do={
             :error ("MAIN-SWITCH must use rstp; existing protocol-mode=" . $protocol)
         }
         # Identity hierarchy: CORE-SW_SW:0, ISULAN-DSW_SW:1, etc.
         :local identity [/system identity get name]
-        :if (($identity ~ "_SW:[0-9]+$") = false) do={
-            :error ("ABORT: Identity must end with _SW:<level>, e.g. CORE-SW_SW:0; current=" . $identity)
+        :local swReference $identity
+        # Bridge comment SW:N is accepted. If both specify SW:N, they must match.
+        :if ($bridgeComment ~ "(^|_)SW:[0-9]+($|_)") do={
+            :if ($identity ~ "_SW:[0-9]+$") do={
+                :local idMarker [:find $identity "_SW:"]
+                :local idLevel [:tonum [:pick $identity ($idMarker + 4) [:len $identity]]]
+                :local bridgeMarker [:find $bridgeComment "_SW:"]
+                :if ([:typeof $bridgeMarker] = "nil") do={ :error "Malformed bridge SW hierarchy" }
+                :local bridgeDigits [:pick $bridgeComment ($bridgeMarker + 4) [:len $bridgeComment]]
+                :local sep [:find $bridgeDigits "_"]
+                :if ([:typeof $sep] != "nil") do={ :set bridgeDigits [:pick $bridgeDigits 0 $sep] }
+                :if ($idLevel != [:tonum $bridgeDigits]) do={
+                    :error "ABORT: SW level differs between bridge comment and identity"
+                }
+            }
+            :set swReference $bridgeComment
         }
-        :local marker [:find $identity "_SW:"]
-        :if ([:typeof $marker] = "nil") do={
-            :error ("ABORT: Missing SW level in identity " . $identity)
+        :if (($swReference ~ "_SW:[0-9]+($|_)") = false) do={
+            :error ("ABORT: Need SW:level in bridge comment or identity; bridge=" . $bridgeComment . " identity=" . $identity)
         }
-        :local hopLevel [:tonum [:pick $identity ($marker + 4) [:len $identity]]]
+        :local marker [:find $swReference "_SW:"]
+        :local digits [:pick $swReference ($marker + 4) [:len $swReference]]
+        :local underscore [:find $digits "_"]
+        :if ([:typeof $underscore] != "nil") do={ :set digits [:pick $digits 0 $underscore] }
+        :local hopLevel [:tonum $digits]
         :if (([:typeof $hopLevel] != "num") || ($hopLevel > 15) || ($hopLevel < 0)) do={
             :error ("ABORT: SW level must be between 0 and 15, got " . $identity)
         }
@@ -399,6 +429,13 @@
         :local actionIds [:toarray ""]
         :local actionValues [:toarray ""]
         :local actionsCount 0
+        :if ($igmpNow != $wantIgmp) do={
+            :put ("UPDATE BRIDGE IGMP snooping " . $bridgeName . " " . $igmpNow . " -> " . $wantIgmp)
+            :set actions ($actions, "IGMP")
+            :set actionIds ($actionIds, $bridgeName)
+            :set actionValues ($actionValues, [:tostr $wantIgmp])
+            :set actionsCount ($actionsCount + 1)
+        }
         :if ($currentPriority != $desiredPriority) do={
             :put ("SET BRIDGE RSTP PRIORITY " . $bridgeName . ": " . $currentPriority . " -> " . $desiredPriority)
             :set actions ($actions, "BRIDGEPRIORITY")
@@ -890,6 +927,9 @@
             :local action [:pick $actions $i]
             :local name [:pick $actionIds $i]
             :local value [:pick $actionValues $i]
+            :if ($action = "IGMP") do={
+                /interface bridge set $bridgeId igmp-snooping=($value = "true")
+            }
             :if ($action = "BRIDGEPRIORITY") do={
                 /interface bridge set $bridgeId priority=[:tonum $value]
             }
