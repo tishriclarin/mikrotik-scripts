@@ -111,8 +111,8 @@
         :local desiredPriority ($hopLevel * 4096)
         :local currentPriority [/interface bridge get $bridgeId priority]
         :put ("RSTP HIERARCHY: " . $identity . " level=" . $hopLevel . " priority=" . $desiredPriority)
-        :put "Root-port candidates: UPLINK cost=1, NAS-LAN backup cost=100, others cost=20000"
-        :put "Restricted-role=no ONLY on UPLINK or NAS-LAN; yes on other unprotected bridge ports."
+        :put "Root-port candidates: UPLINK cost=1, NAS-LAN backup cost=10000, others cost=20000"
+        :put "UPLINK and NAS-LAN: edge=no restricted-role=no; all other unprotected bridge ports: edge=yes restricted-role=yes."
         :if ($hopLevel = 0) do={
             :put "CORE LEVEL 0: root bridge has no root port."
         }
@@ -145,6 +145,7 @@
         :local mediaTypes [:toarray ""]
         :local stpCosts [:toarray ""]
         :local stpRoles [:toarray ""]
+        :local stpEdges [:toarray ""]
         :local universe ""
         :local oltPvids ""
         :local accessPorts ""
@@ -250,16 +251,20 @@
                     :set mediaTypes ($mediaTypes, $media)
                     :local cost 20000
                     :local restriction "yes"
+                    :local edgeSetting "yes"
                     :if ($comment ~ "^UPLINK") do={
                         :set cost 1
                         :set restriction "no"
+                        :set edgeSetting "no"
                     }
                     :if ($comment ~ "^NAS-LAN") do={
-                        :set cost 100
+                        :set cost 10000
                         :set restriction "no"
+                        :set edgeSetting "no"
                     }
                     :set stpCosts ($stpCosts, $cost)
                     :set stpRoles ($stpRoles, $restriction)
+                    :set stpEdges ($stpEdges, $edgeSetting)
                     :foreach id in=[:toarray $tagged] do={ :set universe [$append $universe $id] }
                     :if ([:len $pvid] > 0) do={
                         :set universe [$append $universe $pvid]
@@ -271,7 +276,7 @@
 
         # Validate parallel arrays before referencing them by index.
         :local n [:len $names]
-        :if (([:len $pvids] != $n) || ([:len $tags] != $n) || ([:len $autos] != $n) || ([:len $speeds] != $n) || ([:len $mediaTypes] != $n) || ([:len $stpCosts] != $n) || ([:len $stpRoles] != $n)) do={
+        :if (([:len $pvids] != $n) || ([:len $tags] != $n) || ([:len $autos] != $n) || ([:len $speeds] != $n) || ([:len $mediaTypes] != $n) || ([:len $stpCosts] != $n) || ([:len $stpRoles] != $n) || ([:len $stpEdges] != $n)) do={
             :error "ABORT: Internal port metadata array length mismatch"
         }
         :if ($n = 0) do={ :error "No recognized interface comments on this switch" }
@@ -295,6 +300,7 @@
             :local accessOnly ([:typeof [:find ("," . $accessPorts . ",") ("," . $name . ",")]] != "nil")
             :local wantedCost [:pick $stpCosts $i]
             :local wantedRole [:pick $stpRoles $i]
+            :local wantedEdge [:pick $stpEdges $i]
             # Strict access-port check: do not silently retain explicitly tagged memberships.
             :if ($accessOnly) do={
                 :foreach row in=[/interface bridge vlan find where bridge=$bridgeName] do={
@@ -322,7 +328,9 @@
                 }
                 :local existingCost [/interface bridge port get $existing path-cost]
                 :local existingRole [/interface bridge port get $existing restricted-role]
+                :local existingEdge [:tostr [/interface bridge port get $existing edge]]
                 :local needStp false
+                :if ($existingEdge != $wantedEdge) do={ :set needStp true }
                 :if ([:tostr $existingCost] != [:tostr $wantedCost]) do={
                     :set needStp true
                 }
@@ -333,10 +341,10 @@
                     :if ($existingRole) do={ :set needStp true }
                 }
                 :if ($needStp) do={
-                    :put ("UPDATE RSTP " . $name . " cost=" . $wantedCost . " restricted-role=" . $wantedRole)
+                    :put ("UPDATE RSTP " . $name . " cost=" . $wantedCost . " restricted-role=" . $wantedRole . " edge=" . $wantedEdge)
                     :set actions ($actions, "RSTP")
                     :set actionIds ($actionIds, $name)
-                    :set actionValues ($actionValues, ([:tostr $wantedCost] . ":" . $wantedRole))
+                    :set actionValues ($actionValues, ([:tostr $wantedCost] . ":" . $wantedRole . ":" . $wantedEdge))
                     :set actionsCount ($actionsCount + 1)
                 }
                 :if ($accessOnly) do={
@@ -390,31 +398,36 @@
                 :if (!$managed) do={
                     :local desiredCost 20000
                     :local desiredRole "yes"
+                    :local desiredEdge "yes"
                     :local phy [/interface ethernet find where name=$pname]
                     :if ([:len $phy] = 1) do={
                         :local pc [/interface ethernet get $phy comment]
                         :if ($pc ~ "^UPLINK") do={
                             :set desiredCost 1
                             :set desiredRole "no"
+                            :set desiredEdge "no"
                         }
                         :if ($pc ~ "^NAS-LAN") do={
-                            :set desiredCost 100
+                            :set desiredCost 10000
                             :set desiredRole "no"
+                            :set desiredEdge "no"
                         }
                     }
                     :local nowCost [/interface bridge port get $bp path-cost]
                     :local nowRole [/interface bridge port get $bp restricted-role]
+                    :local nowEdge [:tostr [/interface bridge port get $bp edge]]
                     :local requiresChange ([:tostr $nowCost] != [:tostr $desiredCost])
+                    :if ($nowEdge != $desiredEdge) do={ :set requiresChange true }
                     :if ($desiredRole = "yes") do={
                         :if (!$nowRole) do={ :set requiresChange true }
                     } else={
                         :if ($nowRole) do={ :set requiresChange true }
                     }
                     :if ($requiresChange) do={
-                        :put ("UPDATE RSTP UNANNOTATED " . $pname . " cost=" . $desiredCost . " restricted-role=" . $desiredRole)
+                        :put ("UPDATE RSTP UNANNOTATED " . $pname . " cost=" . $desiredCost . " restricted-role=" . $desiredRole . " edge=" . $desiredEdge)
                         :set actions ($actions, "RSTP")
                         :set actionIds ($actionIds, $pname)
-                        :set actionValues ($actionValues, ([:tostr $desiredCost] . ":" . $desiredRole))
+                        :set actionValues ($actionValues, ([:tostr $desiredCost] . ":" . $desiredRole . ":" . $desiredEdge))
                         :set actionsCount ($actionsCount + 1)
                     }
                 }
@@ -599,60 +612,51 @@
             }
             :if (($action = "PORT") || ($action = "PORTACCESS")) do={
                 :local cost 20000
-                :local restricted "yes"
+                :local restrictedBoolean true
+                :local edgeSetting "yes"
                 :local ethId [/interface ethernet find where name=$name]
                 :if ([:len $ethId] = 1) do={
                     :local c [/interface ethernet get $ethId comment]
                     :if ($c ~ "^UPLINK") do={
                         :set cost 1
-                        :set restricted "no"
+                        :set restrictedBoolean false
+                        :set edgeSetting "no"
                     }
                     :if ($c ~ "^NAS-LAN") do={
-                        :set cost 100
-                        :set restricted "no"
+                        :set cost 10000
+                        :set restrictedBoolean false
+                        :set edgeSetting "no"
                     }
                 }
-                :local restrictedBoolean false
-                :if ($restricted = "yes") do={ :set restrictedBoolean true }
                 :if ($action = "PORTACCESS") do={
                     :if ([:len $value] = 0) do={
                         :error ("ACCESS port missing PVID: " . $name)
                     }
-                    :if ($restricted = "keep") do={
-                        /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost frame-types=admit-only-untagged-and-priority-tagged ingress-filtering=yes
-                    } else={
-                        /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost restricted-role=$restrictedBoolean frame-types=admit-only-untagged-and-priority-tagged ingress-filtering=yes
-                    }
+                    /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost restricted-role=$restrictedBoolean edge=$edgeSetting frame-types=admit-only-untagged-and-priority-tagged ingress-filtering=yes
                 } else={
-                    :if ($restricted = "keep") do={
-                        :if ($value = "") do={
-                            /interface bridge port add bridge=$bridgeName interface=$name path-cost=$cost
-                        } else={
-                            /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost
-                        }
+                    :if ($value = "") do={
+                        /interface bridge port add bridge=$bridgeName interface=$name path-cost=$cost restricted-role=$restrictedBoolean edge=$edgeSetting
                     } else={
-                        :if ($value = "") do={
-                            /interface bridge port add bridge=$bridgeName interface=$name path-cost=$cost restricted-role=$restrictedBoolean
-                        } else={
-                            /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost restricted-role=$restrictedBoolean
-                        }
+                        /interface bridge port add bridge=$bridgeName interface=$name pvid=[:tonum $value] path-cost=$cost restricted-role=$restrictedBoolean edge=$edgeSetting
                     }
                 }
             }
             :if ($action = "RSTP") do={
-                :local sep [:find $value ":"]
-                :if ([:typeof $sep] = "nil") do={ :error "Invalid RSTP planned action" }
-                :local cost [:tonum [:pick $value 0 $sep]]
-                :local restriction [:pick $value ($sep + 1) [:len $value]]
+                :local firstColon [:find $value ":"]
+                :if ([:typeof $firstColon] = "nil") do={ :error "Invalid RSTP planned action" }
+                :local secondColon [:find $value ":" ($firstColon + 1)]
+                :if ([:typeof $secondColon] = "nil") do={ :error "Missing RSTP edge setting" }
+                :local cost [:tonum [:pick $value 0 $firstColon]]
+                :local restriction [:pick $value ($firstColon + 1) $secondColon]
+                :local edgeSetting [:pick $value ($secondColon + 1) [:len $value]]
+                :if ((($restriction != "yes") && ($restriction != "no")) || (($edgeSetting != "yes") && ($edgeSetting != "no"))) do={
+                    :error ("Invalid RSTP state: " . $value)
+                }
                 :local bridgePort [/interface bridge port find where interface=$name and bridge=$bridgeName]
                 :if ([:len $bridgePort] != 1) do={
                     :error ("Missing bridge port " . $name)
                 }
-                :if ($restriction = "keep") do={
-                    /interface bridge port set $bridgePort path-cost=$cost
-                } else={
-                    /interface bridge port set $bridgePort path-cost=$cost restricted-role=($restriction = "yes")
-                }
+                /interface bridge port set $bridgePort path-cost=$cost restricted-role=($restriction = "yes") edge=$edgeSetting
             }
             :if ($action = "ACCESS") do={
                 :local bridgePort [/interface bridge port find where interface=$name and bridge=$bridgeName]
