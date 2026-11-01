@@ -111,7 +111,8 @@
         :local desiredPriority ($hopLevel * 4096)
         :local currentPriority [/interface bridge get $bridgeId priority]
         :put ("RSTP HIERARCHY: " . $identity . " level=" . $hopLevel . " priority=" . $desiredPriority)
-        :put "Port path-cost: UPLINK=1, others=20000; OLT/DOWNLINK restricted-role=yes"
+        :put "Root-port candidates: UPLINK cost=1, NAS-LAN backup cost=100, others cost=20000"
+        :put "Restricted-role=no ONLY on UPLINK or NAS-LAN; yes on other unprotected bridge ports."
         :if ($hopLevel = 0) do={
             :put "CORE LEVEL 0: root bridge has no root port."
         }
@@ -248,13 +249,14 @@
                     :set speeds ($speeds, $speed)
                     :set mediaTypes ($mediaTypes, $media)
                     :local cost 20000
-                    :local restriction "keep"
+                    :local restriction "yes"
                     :if ($comment ~ "^UPLINK") do={
                         :set cost 1
                         :set restriction "no"
                     }
-                    :if (($comment ~ "^OLT") || ($comment ~ "^DOWNLINK")) do={
-                        :set restriction "yes"
+                    :if ($comment ~ "^NAS-LAN") do={
+                        :set cost 100
+                        :set restriction "no"
                     }
                     :set stpCosts ($stpCosts, $cost)
                     :set stpRoles ($stpRoles, $restriction)
@@ -367,6 +369,55 @@
                 :set actionIds ($actionIds, $name)
                 :set actionValues ($actionValues, $pvid)
                 :set actionsCount ($actionsCount + 1)
+            }
+        }
+
+        # Also enforce root guard for EXISTING unannotated bridge ports.
+        # Managed ports are handled above; MGMT-IF members are protected.
+        :foreach bp in=[/interface bridge port find where bridge=$bridgeName] do={
+            :local pname [/interface bridge port get $bp interface]
+            :local isMgmt ([:typeof [:find ("," . $mgmtMembers . ",") ("," . $pname . ",")]] != "nil")
+            :local managed false
+            :foreach known in=$names do={
+                :if ($known = $pname) do={ :set managed true }
+            }
+            :if ($isMgmt) do={
+                :local role [/interface bridge port get $bp restricted-role]
+                :if (!$role) do={
+                    :put ("WARNING: MGMT-IF " . $pname . " remains root-port eligible (protected, not modified)")
+                }
+            } else={
+                :if (!$managed) do={
+                    :local desiredCost 20000
+                    :local desiredRole "yes"
+                    :local phy [/interface ethernet find where name=$pname]
+                    :if ([:len $phy] = 1) do={
+                        :local pc [/interface ethernet get $phy comment]
+                        :if ($pc ~ "^UPLINK") do={
+                            :set desiredCost 1
+                            :set desiredRole "no"
+                        }
+                        :if ($pc ~ "^NAS-LAN") do={
+                            :set desiredCost 100
+                            :set desiredRole "no"
+                        }
+                    }
+                    :local nowCost [/interface bridge port get $bp path-cost]
+                    :local nowRole [/interface bridge port get $bp restricted-role]
+                    :local requiresChange ([:tostr $nowCost] != [:tostr $desiredCost])
+                    :if ($desiredRole = "yes") do={
+                        :if (!$nowRole) do={ :set requiresChange true }
+                    } else={
+                        :if ($nowRole) do={ :set requiresChange true }
+                    }
+                    :if ($requiresChange) do={
+                        :put ("UPDATE RSTP UNANNOTATED " . $pname . " cost=" . $desiredCost . " restricted-role=" . $desiredRole)
+                        :set actions ($actions, "RSTP")
+                        :set actionIds ($actionIds, $pname)
+                        :set actionValues ($actionValues, ([:tostr $desiredCost] . ":" . $desiredRole))
+                        :set actionsCount ($actionsCount + 1)
+                    }
+                }
             }
         }
 
@@ -530,7 +581,7 @@
             }
             :if (($action = "PORT") || ($action = "PORTACCESS")) do={
                 :local cost 20000
-                :local restricted "keep"
+                :local restricted "yes"
                 :local ethId [/interface ethernet find where name=$name]
                 :if ([:len $ethId] = 1) do={
                     :local c [/interface ethernet get $ethId comment]
@@ -538,8 +589,9 @@
                         :set cost 1
                         :set restricted "no"
                     }
-                    :if (($c ~ "^OLT") || ($c ~ "^DOWNLINK")) do={
-                        :set restricted "yes"
+                    :if ($c ~ "^NAS-LAN") do={
+                        :set cost 100
+                        :set restricted "no"
                     }
                 }
                 :local restrictedBoolean false
@@ -611,6 +663,8 @@
         :put "CONFIG UPDATE COMPLETE. Verify VLANs, root port, and link status before Safe Mode commit."
         :put ("Identity SW level " . $hopLevel . " is manually declared; NOT measured hop count.")
         :put ("Bridge RSTP root-port and root-path-cost check:")
+        :put "UPLINK is preferred; NAS-LAN is fallback only if it receives a suitable upstream BPDU."
+        :put "RSTP path cost cannot guarantee root-port choice against arbitrary advertised upstream costs."
         /interface bridge monitor $bridgeName once
     }
 }
