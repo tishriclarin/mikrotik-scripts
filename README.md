@@ -69,22 +69,20 @@ It selects Ethernet interfaces whose comments begin with `OLT-` and sets each ma
 
 ## Current global isolation script: ros7SwitchIsolateOLT
 
-For the current global function, use the **validated bootstrap installer** rather than importing the main script directly.
+Use the separate loader `load-ros7SwitchIsolateOLT.rsc` for installation. Both `load-ros7SwitchIsolateOLT.rsc` and `ros7SwitchIsolateOLT.rsc` must be present under MikroTik Files. Download and verify their matching SHA-512 sidecars first.
 
-Place these two files in MikroTik Files, together with their .sha512 companion files:
-- ros7SwitchIsolateOLT.rsc
-- install-ros7SwitchIsolateOLT.rsc
+Run:
 
-First verify the downloaded SHA-512 checksums. Then run:
+```routeros
+/import file-name=load-ros7SwitchIsolateOLT.rsc
+:global ros7SwitchIsolateOLT
+[$ros7SwitchIsolateOLT false]
+```
 
-    /import file-name=install-ros7SwitchIsolateOLT.rsc
-    :global ros7SwitchIsolateOLT
-    [$ros7SwitchIsolateOLT false]
+The **main script** checks the RouterOS major version (7). The **separate loader** requires RouterOS 7.16+, checks that the main .rsc file exists, runs `/import file-name=ros7SwitchIsolateOLT.rsc verbose=yes dry-run`, and imports the main script **only when dry-run succeeds**. Main-script import registers the global function and performs a preview-only self-test; it does not apply port isolation.
 
-The bootstrap requires RouterOS 7.16+ and uses the documented import verbose dry-run mode to check the main .rsc file BEFORE importing it. Actual import registers the global function and performs a read-only preview self-test. Dry-run does not prove hardware support or runtime success.
+For a remote apply, use an interactive Safe Mode session (Ctrl+X), verify a second management connection, and run `[$ros7SwitchIsolateOLT true]` after reviewing the plan.
 
-For a remote apply, use an interactive Safe Mode session (Ctrl+X) and verify a second management connection before committing. After reviewing the preview:
+Dry-run checks import syntax and some command errors but does not guarantee runtime or hardware compatibility. The existing `install-ros7SwitchIsolateOLT.rsc` is retained for compatibility; the recommended new entry point is `load-ros7SwitchIsolateOLT.rsc`.
 
-    [$ros7SwitchIsolateOLT true]
-
-The current main script does NOT yet include the proposed concurrent-run cancellation, 30-second confirmation timeout, or two-generation backup rotation. Do not assume those protections are present.
+**Pending safety features:** the current main script does not yet implement single-instance cancellation, a 30-second confirmation timeout, or automatic backup rotation.
