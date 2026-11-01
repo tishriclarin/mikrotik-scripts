@@ -171,7 +171,10 @@
             }
         }
         :if (!$swReady) do={
-            :put ("SW:AUTO SKIP: root-port=" . $p1 . " cost=" . $c1 . ". Requires stable UPLINK root port with cost=1.")
+            :put ("SW:AUTO pending: root-port=" . $p1 . " cost=" . $c1 . ". Waiting for stable UPLINK root.")
+            :if (!($bridgeComment ~ "(^|_)CHECK-SW($|_)")) do={
+                :set proposedBridgeComment ($bridgeComment . "_CHECK-SW")
+            }
         } else={
             :local pos [:find $bridgeComment "_SW-VALUE:"]
             :if ([:typeof $pos] = "nil") do={
@@ -184,6 +187,10 @@
                 } else={
                     :set proposedBridgeComment ($prefix . $hopLevel . [:pick $bridgeComment $next [:len $bridgeComment]])
                 }
+            }
+            :local mark [:find $proposedBridgeComment "_CHECK-SW"]
+            :if ([:typeof $mark] != "nil") do={
+                :set proposedBridgeComment ([:pick $proposedBridgeComment 0 $mark] . [:pick $proposedBridgeComment ($mark + 9) [:len $proposedBridgeComment]])
             }
             :put ("SW:AUTO verified root-port=" . $p1 . " root-path-cost=" . $hopLevel)
         }
@@ -519,7 +526,7 @@
         :set actionValues ($actionValues, [:tostr $desiredPriority])
         :set actionsCount ($actionsCount + 1)
     }
-    :if ($swAuto && $swReady && ($bridgeComment != $proposedBridgeComment)) do={
+    :if ($swAuto && ($bridgeComment != $proposedBridgeComment)) do={
         :put ("UPDATE BRIDGE COMMENT " . $bridgeComment . " -> " . $proposedBridgeComment)
         :set actions ($actions, "BRIDGECOMMENT")
         :set actionIds ($actionIds, $bridgeName)
