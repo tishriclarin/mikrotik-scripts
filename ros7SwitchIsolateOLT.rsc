@@ -1,4 +1,9 @@
 # RouterOS 7 global function installer (import registers function, never applies changes).
+:local rosVersion [/system resource get version]
+:if ([:pick $rosVersion 0 2] != "7.") do={
+    :error ("ABORT: Requires RouterOS 7; running " . $rosVersion)
+}
+:put ("RouterOS version verified: " . $rosVersion)
 :local prior [/system script find where name="ros7SwitchIsolateOLT"]
 :if ([:len $prior] > 0) do={ /system script remove $prior }
 /system script add name=ros7SwitchIsolateOLT policy=read,write,test source={
@@ -168,8 +173,21 @@
         :put "ISOLATION APPLIED. Check subscriber traffic and management before committing."
     }
 }
+:local installedId [/system script find where name="ros7SwitchIsolateOLT"]
+:if ([:len $installedId] != 1) do={ :error "ABORT: Installed script not found uniquely" }
+:onerror parseError in={
+    :local parsed [:parse [/system script get $installedId source]]
+} do={
+    :error ("ABORT: Installed script parse failed: " . $parseError)
+}
+:put "Saved system script parse check PASSED"
 /system script run ros7SwitchIsolateOLT
 :global ros7SwitchIsolateOLT
-:put "Global function loaded; no changes were applied during import."
+:if ([:typeof $ros7SwitchIsolateOLT] != "code") do={
+    :error "ABORT: Global function was not registered"
+}
+:put "Global function registered. Starting read-only preview self-test..."
+[$ros7SwitchIsolateOLT false]
+:put "Preview test completed; no forwarding changes were made."
 :put "Call preview: :global ros7SwitchIsolateOLT; [\$ros7SwitchIsolateOLT false]"
 :put "Call apply:   :global ros7SwitchIsolateOLT; [\$ros7SwitchIsolateOLT true]"
