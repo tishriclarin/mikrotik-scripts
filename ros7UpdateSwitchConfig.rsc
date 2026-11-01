@@ -325,7 +325,7 @@
                         }
                         :put ("EXTEND TAGGED VLAN " . $vid . " -> " . $newTag)
                         :set actions ($actions, "VLANSET")
-                        :set actionIds ($actionIds, $vid)
+                        :set actionIds ($actionIds, $row)
                         :set actionValues ($actionValues, $newTag)
                         :set actionsCount ($actionsCount + 1)
                     }
@@ -365,15 +365,17 @@
                         :error ("SPEED:" . $speed . " needs explicit MEDIA on " . $name)
                     }
                 }
-                :local eth [/interface ethernet find where name=$name]
-                :local actualSpeed [:tostr [/interface ethernet get $eth speed]]
-                :local negotiation [/interface ethernet get $eth auto-negotiation]
-                :if (($actualSpeed != $mode) || ($negotiation)) do={
-                    :put ("SPEED " . $name . ": auto-negotiation=no speed=" . $mode)
-                    :set actions ($actions, "SPEED")
-                    :set actionIds ($actionIds, $name)
-                    :set actionValues ($actionValues, $mode)
-                    :set actionsCount ($actionsCount + 1)
+                :if ([:len $mode] > 0) do={
+                    :local eth [/interface ethernet find where name=$name]
+                    :local actualSpeed [:tostr [/interface ethernet get $eth speed]]
+                    :local negotiation [/interface ethernet get $eth auto-negotiation]
+                    :if (($actualSpeed != $mode) || ($negotiation)) do={
+                        :put ("SPEED " . $name . ": auto-negotiation=no speed=" . $mode)
+                        :set actions ($actions, "SPEED")
+                        :set actionIds ($actionIds, $name)
+                        :set actionValues ($actionValues, $mode)
+                        :set actionsCount ($actionsCount + 1)
+                    }
                 }
             }
         }
@@ -432,7 +434,7 @@
                 /interface bridge vlan add bridge=$bridgeName vlan-ids=[:tonum $name] tagged=$value
             }
             :if ($action = "VLANSET") do={
-                /interface bridge vlan set [find where bridge=$bridgeName and vlan-ids=[:tonum $name] and dynamic=no] tagged=$value
+                /interface bridge vlan set $name tagged=$value
             }
             :if ($action = "SPEEDAUTO") do={
                 /interface ethernet set [find where name=$name] auto-negotiation=yes
